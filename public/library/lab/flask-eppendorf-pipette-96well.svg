@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 160" fill="none">
+  <!-- soft lab bench -->
+  <rect x="8" y="128" width="264" height="10" rx="3" fill="#f3d4e0" opacity="0.55"/>
+  <rect x="12" y="132" width="256" height="4" rx="2" fill="#e8b4c8" opacity="0.4"/>
+
+  <!-- ========== FLASK (left) ========== -->
+  <g id="flask">
+    <!-- neck -->
+    <rect x="42" y="28" width="18" height="22" rx="2" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.4"/>
+    <rect x="38" y="24" width="26" height="7" rx="2" fill="#0284c7"/>
+    <!-- body -->
+    <path d="M44 48 L44 62 L28 118 C26 124 30 128 38 128 L64 128 C72 128 76 124 74 118 L58 62 L58 48"
+          fill="#e0f2fe" stroke="#0284c7" stroke-width="1.6" stroke-linejoin="round"/>
+    <!-- liquid -->
+    <path d="M32 96 L70 96 L68 118 C67 122 64 124 58 124 L44 124 C38 124 35 122 34 118 Z"
+          fill="#38bdf8" opacity="0.75"/>
+    <!-- bubbles -->
+    <circle cx="48" cy="108" r="2.2" fill="#7dd3fc"/>
+    <circle cx="56" cy="112" r="1.6" fill="#bae6fd"/>
+    <circle cx="52" cy="102" r="1.3" fill="#7dd3fc"/>
+    <!-- label -->
+    <text x="51" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" font-weight="600" fill="#7a5464">Flask</text>
+  </g>
+
+  <!-- ========== EPPENDORF (center-left) ========== -->
+  <g id="eppendorf">
+    <!-- cap -->
+    <path d="M98 36 L118 36 C122 36 124 38 124 42 L124 48 L92 48 L92 42 C92 38 94 36 98 36 Z"
+          fill="#f9a8d4" stroke="#db2777" stroke-width="1.3"/>
+    <ellipse cx="108" cy="36" rx="10" ry="4" fill="#fce7f3" stroke="#db2777" stroke-width="1.2"/>
+    <!-- hinge tab -->
+    <path d="M124 40 L132 34 L134 38 L126 46 Z" fill="#f472b6" stroke="#be185d" stroke-width="1"/>
+    <!-- tube body (conical) -->
+    <path d="M96 48 L120 48 L116 100 C115 112 112 118 108 120 C104 118 101 112 100 100 Z"
+          fill="#fdf2f8" stroke="#db2777" stroke-width="1.5" stroke-linejoin="round"/>
+    <!-- liquid sample -->
+    <path d="M102 92 L114 92 L112 106 C111 112 110 116 108 117 C106 116 105 112 104 106 Z"
+          fill="#f472b6" opacity="0.8"/>
+    <!-- meniscus highlight -->
+    <ellipse cx="108" cy="92" rx="5.5" ry="1.5" fill="#fbcfe8" opacity="0.9"/>
+    <!-- graduation marks -->
+    <line x1="98" y1="60" x2="104" y2="60" stroke="#f9a8d4" stroke-width="1"/>
+    <line x1="98" y1="72" x2="104" y2="72" stroke="#f9a8d4" stroke-width="1"/>
+    <line x1="99" y1="84" x2="104" y2="84" stroke="#f9a8d4" stroke-width="1"/>
+    <text x="108" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" font-weight="600" fill="#7a5464">Eppendorf</text>
+  </g>
+
+  <!-- ========== PIPETTE (center-right, angled into plate) ========== -->
+  <g id="pipette" transform="translate(148 8) rotate(18 20 50)">
+    <!-- plunger button -->
+    <rect x="12" y="2" width="16" height="10" rx="3" fill="#a78bfa" stroke="#6d28d9" stroke-width="1.2"/>
+    <rect x="14" y="4" width="12" height="4" rx="1.5" fill="#c4b5fd"/>
+    <!-- volume dial body -->
+    <rect x="10" y="12" width="20" height="28" rx="4" fill="#c4b5fd" stroke="#7c3aed" stroke-width="1.3"/>
+    <!-- display window -->
+    <rect x="13" y="18" width="14" height="10" rx="2" fill="#ede9fe" stroke="#8b5cf6" stroke-width="1"/>
+    <text x="20" y="26" text-anchor="middle" font-family="system-ui,sans-serif" font-size="6" font-weight="700" fill="#5b21b6">200</text>
+    <!-- shaft -->
+    <rect x="14" y="40" width="12" height="36" rx="2" fill="#ddd6fe" stroke="#7c3aed" stroke-width="1.2"/>
+    <!-- ejector sleeve -->
+    <rect x="12" y="74" width="16" height="10" rx="2" fill="#8b5cf6"/>
+    <!-- tip cone -->
+    <path d="M14 84 L12 104 L28 104 L26 84 Z" fill="#e9d5ff" stroke="#7c3aed" stroke-width="1.1"/>
+    <!-- disposable tip -->
+    <path d="M14 104 L18 128 L22 128 L26 104 Z" fill="#f5f3ff" stroke="#6d28d9" stroke-width="1.1"/>
+    <!-- droplet leaving tip -->
+    <ellipse cx="20" cy="134" rx="3.2" ry="4.5" fill="#38bdf8" opacity="0.9"/>
+    <ellipse cx="20" cy="132" rx="1.4" ry="1.8" fill="#7dd3fc" opacity="0.8"/>
+  </g>
+  <text x="168" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" font-weight="600" fill="#7a5464">Pipette</text>
+
+  <!-- ========== 96-WELL PLATE (right, blue) ========== -->
+  <g id="plate">
+    <!-- plate body -->
+    <rect x="188" y="78" width="80" height="52" rx="4" fill="#1e40af" stroke="#1e3a8a" stroke-width="1.5"/>
+    <!-- raised rim -->
+    <rect x="190" y="80" width="76" height="48" rx="3" fill="#2563eb" stroke="#1d4ed8" stroke-width="1"/>
+    <!-- wells 4x6 simplified grid (readable at icon size; reads as 96-well style) -->
+    <!-- row 1 -->
+    <circle cx="202" cy="92" r="3.4" fill="#93c5fd" stroke="#1e40af" stroke-width="0.7"/>
+    <circle cx="214" cy="92" r="3.4" fill="#60a5fa" stroke="#1e40af" stroke-width="0.7"/>
+    <circle cx="226" cy="92" r="3.4" fill="#3b82f6" stroke="#1e40af" stroke-width="0.7"/>
+    <circle cx="238" cy="92" r="3.4" fill="#60a5fa" stroke="#1e40af" stroke-width="0.7"/>
+    <circle cx="250" cy="92" r="3.4" fill="#93c5fd" stroke="#1e40af" stroke-width="0.7"/>
+    <circle cx="262" cy="92" r="3.4" fill="#bfdbfe" stroke="#1e40af" stroke-width="0.7"/>
+    <!-- row 2 -->
+    <circle cx="202" cy="104" r="3.4" fill="#60a5fa" stroke="#1e40af" stroke-width="0.7"/>
+    <circle cx="214" cy="104" r="3.4" fill="#3b82f6" stroke="#1e40af" stroke-width="0.7"/>
+    <!-- active well receiving drop (highlight) -->
+    <circle cx="226" cy="104" r="3.8" fill="#7dd3fc" stroke="#0ea5e9" stroke-width="1.2"/>
+    <circle cx="226" cy="104" r="1.6" fill="#e0f2fe"/>
+    <circle cx="238" cy="104" r="3.4" fill="#60a5fa" stroke="#1e40af" stroke-width="0.7"/>
+    <circle cx="250" cy="104" r="3.4" fill="#3b82f6" stroke="#1e40af" stroke-width="0.7"/>
+    <circle cx="262" cy="104" r="3.4" fill="#93c5fd" stroke="#1e40af" stroke-width="0.7"/>
+    <!-- row 3 -->
+    <circle cx="202" cy="116" r="3.4" fill="#93c5fd" stroke="#1e40af" stroke-width="0.7"/>
+    <circle cx="214" cy="116" r="3.4" fill="#60a5fa" stroke="#1e40af" stroke-width="0.7"/>
+    <circle cx="226" cy="116" r="3.4" fill="#bfdbfe" stroke="#1e40af" stroke-width="0.7"/>
+    <circle cx="238" cy="116" r="3.4" fill="#60a5fa" stroke="#1e40af" stroke-width="0.7"/>
+    <circle cx="250" cy="116" r="3.4" fill="#93c5fd" stroke="#1e40af" stroke-width="0.7"/>
+    <circle cx="262" cy="116" r="3.4" fill="#60a5fa" stroke="#1e40af" stroke-width="0.7"/>
+    <!-- plate label strip -->
+    <rect x="192" y="82" width="8" height="44" rx="1" fill="#1e3a8a" opacity="0.35"/>
+    <text x="228" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" font-weight="600" fill="#7a5464">96-well plate</text>
+  </g>
+
+  <!-- dashed motion line from tip to well -->
+  <path d="M178 118 Q200 112 222 106" stroke="#0ea5e9" stroke-width="1.2" stroke-dasharray="3 2" fill="none" opacity="0.7"/>
+</svg>

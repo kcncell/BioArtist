@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "mcp/flask-eppendorf-pipette-96well",
+      "name": "Flask + Eppendorf + pipette → 96-well",
+      "category": "lab",
+      "filename": "flask-eppendorf-pipette-96well.svg",
+      "path": "/mcp-inbox/flask-eppendorf-pipette-96well.svg",
+      "createdAt": "2026-07-17T08:29:45.368Z",
+      "source": "mcp"
+    },
+    {
+      "id": "mcp/flask-blue",
+      "name": "Flask (blue liquid)",
+      "category": "lab",
+      "filename": "flask-blue.svg",
+      "path": "/mcp-inbox/flask-blue.svg",
+      "createdAt": "2026-07-17T08:29:45.368Z",
+      "source": "mcp"
+    },
+    {
+      "id": "mcp/eppendorf",
+      "name": "Eppendorf tube",
+      "category": "lab",
+      "filename": "eppendorf.svg",
+      "path": "/mcp-inbox/eppendorf.svg",
+      "createdAt": "2026-07-17T08:29:45.368Z",
+      "source": "mcp"
+    },
+    {
+      "id": "mcp/pipette-detail",
+      "name": "Pipette",
+      "category": "lab",
+      "filename": "pipette-detail.svg",
+      "path": "/mcp-inbox/pipette-detail.svg",
+      "createdAt": "2026-07-17T08:29:45.368Z",
+      "source": "mcp"
+    },
+    {
+      "id": "mcp/well-plate-96-blue",
+      "name": "96-well plate (blue)",
+      "category": "lab",
+      "filename": "well-plate-96-blue.svg",
+      "path": "/mcp-inbox/well-plate-96-blue.svg",
+      "createdAt": "2026-07-17T08:29:45.368Z",
+      "source": "mcp"
+    },
+    {
+      "id": "mcp/dna-cas9-interaction-mroo5q8z",
+      "name": "DNA–Cas9 interaction",
+      "category": "dna",
+      "filename": "dna-cas9-interaction-mroo5q8z.svg",
+      "path": "/mcp-inbox/dna-cas9-interaction-mroo5q8z.svg",
+      "createdAt": "2026-07-17T08:21:39.492Z",
+      "source": "mcp",
+      "note": "DNA double helix engaged by bilobed Cas9 (CRISPR-style schematic)"
+    },
+    {
+      "id": "mcp/demo-helix-mcp",
+      "name": "Demo helix (MCP)",
+      "category": "dna",
+      "filename": "demo-helix-mcp.svg",
+      "path": "/mcp-inbox/demo-helix-mcp.svg",
+      "createdAt": "2026-07-17T08:17:14.779Z",
+      "source": "mcp"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 100" fill="none">
+  <!-- DNA double helix (left → center) -->
+  <path d="M12 20 C28 32, 28 40, 12 52 C-4 64, -4 72, 12 84" stroke="#db2777" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+  <path d="M36 20 C20 32, 20 40, 36 52 C52 64, 52 72, 36 84" stroke="#9d174d" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+  <line x1="14" y1="28" x2="34" y2="28" stroke="#f9a8d4" stroke-width="1.4"/>
+  <line x1="12" y1="40" x2="36" y2="40" stroke="#f9a8d4" stroke-width="1.4"/>
+  <line x1="14" y1="52" x2="34" y2="52" stroke="#f9a8d4" stroke-width="1.4"/>
+  <line x1="12" y1="64" x2="36" y2="64" stroke="#f9a8d4" stroke-width="1.4"/>
+  <line x1="14" y1="76" x2="34" y2="76" stroke="#f9a8d4" stroke-width="1.4"/>
+
+  <!-- DNA continues into Cas9 cleft -->
+  <path d="M36 40 C52 38, 60 36, 72 42" stroke="#db2777" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+  <path d="M36 56 C50 54, 58 52, 70 58" stroke="#9d174d" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+
+  <!-- Cas9 bilobed protein (pink flower palette) -->
+  <ellipse cx="108" cy="48" rx="38" ry="32" fill="#fce7f3" stroke="#be185d" stroke-width="1.8"/>
+  <!-- NUC lobe -->
+  <ellipse cx="92" cy="42" rx="18" ry="16" fill="#f9a8d4" stroke="#db2777" stroke-width="1.2" opacity="0.95"/>
+  <!-- HNH / REC lobe -->
+  <ellipse cx="122" cy="52" rx="20" ry="18" fill="#f472b6" stroke="#9d174d" stroke-width="1.2" opacity="0.9"/>
+  <!-- Active site pocket -->
+  <ellipse cx="100" cy="50" rx="10" ry="8" fill="#fff1f2" stroke="#db2777" stroke-width="1" opacity="0.85"/>
+  <!-- DNA clamp region -->
+  <path d="M78 36 C84 30, 96 28, 104 34" stroke="#be185d" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <path d="M78 64 C86 70, 98 72, 108 66" stroke="#be185d" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+  <!-- Cut marks (DSB) near interaction -->
+  <path d="M68 44 L74 50 L68 56" stroke="#e11d48" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="71" cy="50" r="2.2" fill="#fb7185"/>
+
+  <!-- Labels -->
+  <text x="24" y="14" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" font-weight="600" fill="#9d174d">DNA</text>
+  <text x="118" y="14" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" font-weight="600" fill="#9d174d">Cas9</text>
+  <text x="80" y="96" text-anchor="middle" font-family="system-ui,sans-serif" font-size="8" fill="#b08a9a">DNA–Cas9 interaction</text>
+</svg>
