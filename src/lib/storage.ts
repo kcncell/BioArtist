@@ -4,6 +4,9 @@ import type { PackManifest, PackId } from './packs';
 
 const FAVORITES_KEY = 'bioartist-favorites';
 const FAVORITES_DOCK_OPEN_KEY = 'bioartist-favorites-dock-open';
+const GLASS_OPACITY_KEY = 'bioartist-glass-opacity-v7';
+const GLASS_HUE_KEY = 'bioartist-glass-hue-v7';
+const THEME_MODE_KEY = 'bioartist-theme-mode-v7';
 
 const DB_NAME = 'bioartist';
 const DB_VERSION = 3;
@@ -306,6 +309,63 @@ export function loadFavoritesDockOpen(): boolean {
 export function saveFavoritesDockOpen(open: boolean): void {
   try {
     localStorage.setItem(FAVORITES_DOCK_OPEN_KEY, open ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadGlassOpacity(): number {
+  try {
+    const n = Number(localStorage.getItem(GLASS_OPACITY_KEY));
+    // Range: 0 → 0.5 (0–50% glass frost)
+    if (!Number.isFinite(n)) return 0.22;
+    return Math.min(0.5, Math.max(0, n));
+  } catch {
+    return 0.22;
+  }
+}
+
+export function saveGlassOpacity(v: number): void {
+  try {
+    localStorage.setItem(GLASS_OPACITY_KEY, String(v));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadGlassHue(): number {
+  try {
+    const n = Number(localStorage.getItem(GLASS_HUE_KEY));
+    if (!Number.isFinite(n)) return 220;
+    return ((Math.round(n) % 360) + 360) % 360;
+  } catch {
+    return 220;
+  }
+}
+
+export function saveGlassHue(v: number): void {
+  try {
+    localStorage.setItem(GLASS_HUE_KEY, String(v));
+  } catch {
+    /* ignore */
+  }
+}
+
+export type StoredThemeMode = 'dark' | 'light';
+
+export function loadThemeMode(): StoredThemeMode {
+  try {
+    const v = localStorage.getItem(THEME_MODE_KEY);
+    if (v === 'light' || v === 'dark') return v;
+    return 'dark';
+  } catch {
+    return 'dark';
+  }
+}
+
+export function saveThemeMode(mode: StoredThemeMode): void {
+  try {
+    localStorage.setItem(THEME_MODE_KEY, mode);
   } catch {
     /* ignore */
   }

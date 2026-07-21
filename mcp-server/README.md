@@ -22,7 +22,7 @@ The MCP server writes files into BioArtist’s `public/mcp-inbox/` folder (serve
 ## Install
 
 ```bash
-cd /Users/pradyu/GitHub/BioArtist
+cd /path/to/BioArtist
 npm run mcp:install
 ```
 
@@ -36,12 +36,14 @@ node mcp-server/src/index.js
 
 ## Claude Desktop / Cursor config example
 
+Replace the path with the absolute path on **your** machine:
+
 ```json
 {
   "mcpServers": {
     "bioartist": {
       "command": "node",
-      "args": ["/Users/pradyu/GitHub/BioArtist/mcp-server/src/index.js"]
+      "args": ["/absolute/path/to/BioArtist/mcp-server/src/index.js"]
     }
   }
 }

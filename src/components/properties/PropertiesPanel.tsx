@@ -15,7 +15,10 @@ function applyTextAlign(align: 'left' | 'center' | 'right') {
   canvas.requestRenderAll();
 }
 
-/** 7 preset colors; 8th slot is the system color / eyedropper picker */
+/** Sentinel for no fill / no border */
+export const COLOR_NONE = 'transparent';
+
+/** 7 solid presets; first slot is none; last is system color picker */
 const SWATCHES = [
   '#0b0c0f',
   '#f0f2f5',
@@ -26,24 +29,60 @@ const SWATCHES = [
   '#a78bfa',
 ];
 
+function isNoneColor(value: string | undefined | null): boolean {
+  const v = (value || '').trim().toLowerCase();
+  return (
+    v === '' ||
+    v === 'none' ||
+    v === 'transparent' ||
+    v === 'rgba(0,0,0,0)' ||
+    v === 'rgba(0, 0, 0, 0)'
+  );
+}
+
 type ColorRowProps = {
   label: string;
   value: string;
   onChange: (color: string) => void;
+  noneTitle: string;
 };
 
-function ColorSwatchRow({ label, value, onChange }: ColorRowProps) {
+function ColorSwatchRow({ label, value, onChange, noneTitle }: ColorRowProps) {
+  const none = isNoneColor(value);
   const current = toColorInput(value);
 
   return (
     <div className="ba-field">
       <label>{label}</label>
       <div className="ba-swatches ba-swatches-inline">
+        <button
+          type="button"
+          className={`ba-swatch ba-swatch-none ${none ? 'active' : ''}`}
+          title={noneTitle}
+          aria-label={noneTitle}
+          onClick={() => onChange(COLOR_NONE)}
+        >
+          <svg
+            className="ba-swatch-none-icon"
+            viewBox="0 0 22 22"
+            width="22"
+            height="22"
+            aria-hidden
+          >
+            <circle cx="11" cy="11" r="9" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            <path
+              d="M6.2 6.2 L15.8 15.8"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
         {SWATCHES.map((c) => (
           <button
             key={c}
             type="button"
-            className={`ba-swatch ${current.toLowerCase() === c.toLowerCase() ? 'active' : ''}`}
+            className={`ba-swatch ${!none && current.toLowerCase() === c.toLowerCase() ? 'active' : ''}`}
             style={{ background: c }}
             title={c}
             onClick={() => onChange(c)}
@@ -53,7 +92,10 @@ function ColorSwatchRow({ label, value, onChange }: ColorRowProps) {
           className="ba-swatch ba-swatch-picker"
           title="Pick any color (system picker / screen eyedropper when available)"
         >
-          <span className="ba-swatch-picker-face" style={{ background: current }} />
+          <span
+            className="ba-swatch-picker-face"
+            style={{ background: none ? 'transparent' : current }}
+          />
           <Pipette size={11} className="ba-swatch-picker-icon" aria-hidden />
           <input
             type="color"
@@ -179,12 +221,14 @@ export function PropertiesPanel() {
       <ColorSwatchRow
         label="Fill / recolor"
         value={props.fill}
+        noneTitle="No fill"
         onChange={(fill) => applyProps({ fill })}
       />
 
       <ColorSwatchRow
         label="Border / stroke"
         value={props.stroke}
+        noneTitle="No border"
         onChange={(stroke) => applyProps({ stroke })}
       />
 
@@ -289,6 +333,7 @@ export function PropertiesPanel() {
 }
 
 function toColorInput(color: string): string {
+  if (isNoneColor(color)) return '#000000';
   if (/^#[0-9a-fA-F]{6}$/.test(color)) return color;
   if (/^#[0-9a-fA-F]{3}$/.test(color)) {
     const r = color[1];
@@ -296,5 +341,5 @@ function toColorInput(color: string): string {
     const b = color[3];
     return `#${r}${r}${g}${g}${b}${b}`;
   }
-  return '#8ec5ff';
+  return '#000000';
 }

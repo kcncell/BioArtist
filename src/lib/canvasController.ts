@@ -283,8 +283,20 @@ export function getSelectionProps(): {
   const active = canvas.getActiveObjects();
   if (!active.length) return { count: 0, props: null, selectedIds: [] };
   const obj = asBa(active[0]);
-  const fill = typeof obj.fill === 'string' ? obj.fill : '#8ec5ff';
-  const stroke = typeof obj.stroke === 'string' ? obj.stroke : '#111827';
+  const fillRaw = obj.fill;
+  const strokeRaw = obj.stroke;
+  const fill =
+    fillRaw == null || fillRaw === '' || fillRaw === 'none'
+      ? 'transparent'
+      : typeof fillRaw === 'string'
+        ? fillRaw
+        : '#000000';
+  const stroke =
+    strokeRaw == null || strokeRaw === '' || strokeRaw === 'none'
+      ? 'transparent'
+      : typeof strokeRaw === 'string'
+        ? strokeRaw
+        : '#111827';
   const fontSize =
     'fontSize' in obj && typeof (obj as IText).fontSize === 'number'
       ? (obj as IText).fontSize
@@ -753,6 +765,17 @@ function scheduleHistoryPush() {
   }, 280);
 }
 
+function isNoneColor(c: string) {
+  const v = (c || '').trim().toLowerCase();
+  return (
+    v === '' ||
+    v === 'none' ||
+    v === 'transparent' ||
+    v === 'rgba(0,0,0,0)' ||
+    v === 'rgba(0, 0, 0, 0)'
+  );
+}
+
 function setFillRecursive(obj: FabricObject, fill: string) {
   const anyObj = obj as FabricObject & { _objects?: FabricObject[] };
   if (anyObj._objects && Array.isArray(anyObj._objects)) {
@@ -760,12 +783,32 @@ function setFillRecursive(obj: FabricObject, fill: string) {
   }
   const current = obj.fill;
   const t = (obj.type || '').toLowerCase();
+  const next = isNoneColor(fill) ? 'transparent' : fill;
+  const shapeTypes = [
+    'rect',
+    'ellipse',
+    'circle',
+    'triangle',
+    'polygon',
+    'i-text',
+    'textbox',
+    'text',
+  ];
+  if (isNoneColor(fill)) {
+    // Always allow clearing fill on drawable types (and groups via recursion)
+    if (shapeTypes.includes(t) || t === 'path' || t === 'group' || t === 'activeselection') {
+      obj.set('fill', 'transparent');
+    } else if (current && typeof current === 'string') {
+      obj.set('fill', 'transparent');
+    }
+    return;
+  }
   if (current && current !== 'none' && typeof current === 'string') {
-    obj.set('fill', fill);
-  } else if (['rect', 'ellipse', 'circle', 'triangle', 'polygon', 'i-text', 'textbox', 'text'].includes(t)) {
-    obj.set('fill', fill);
+    obj.set('fill', next);
+  } else if (shapeTypes.includes(t)) {
+    obj.set('fill', next);
   } else if (t === 'path' && current && current !== 'none') {
-    obj.set('fill', fill);
+    obj.set('fill', next);
   }
 }
 
@@ -775,9 +818,17 @@ function setStrokeRecursive(obj: FabricObject, stroke: string) {
     anyObj._objects.forEach((child) => setStrokeRecursive(child, stroke));
   }
   const current = obj.stroke;
+  const t = (obj.type || '').toLowerCase();
+  const strokeTypes = ['line', 'rect', 'ellipse', 'circle', 'path', 'triangle', 'polygon', 'polyline'];
+  if (isNoneColor(stroke)) {
+    if (strokeTypes.includes(t) || (current && current !== 'none')) {
+      obj.set('stroke', 'transparent');
+    }
+    return;
+  }
   if (current && current !== 'none') {
     obj.set('stroke', stroke);
-  } else if (['line', 'rect', 'ellipse', 'circle', 'path'].includes((obj.type || '').toLowerCase())) {
+  } else if (strokeTypes.includes(t)) {
     obj.set('stroke', stroke);
   }
 }
@@ -792,13 +843,39 @@ function setStrokeWidthRecursive(obj: FabricObject, width: number) {
 
 let placeCascade = 0;
 
+/** Drop full-frame white / transparent plates so SVGs (e.g. RDKit) don't mask artboard. */
+function isOpaqueBackdropRect(obj: FabricObject): boolean {
+  const t = (obj.type || '').toLowerCase();
+  if (t !== 'rect') return false;
+  const fill = obj.fill;
+  if (fill == null || fill === '' || fill === 'none' || fill === 'transparent') return true;
+  if (typeof fill !== 'string') return false;
+  const f = fill.toLowerCase().replace(/\s+/g, '');
+  const whiteish =
+    f === '#fff' ||
+    f === '#ffffff' ||
+    f === 'white' ||
+    f.startsWith('#ffffff') ||
+    f.startsWith('rgb(255,255,255') ||
+    f.startsWith('rgba(255,255,255');
+  if (!whiteish) return false;
+  // Alpha 0 in rgba → always drop
+  if (/rgba\([^)]+,0(?:\.0+)?\)/.test(f)) return true;
+  const w = (obj.width || 0) * Math.abs(obj.scaleX || 1);
+  const h = (obj.height || 0) * Math.abs(obj.scaleY || 1);
+  // Large plate (typical mol drawing canvas background)
+  return w >= 40 && h >= 40;
+}
+
 export async function addSvgToCanvas(
   svgText: string,
   opts?: { left?: number; top?: number; name?: string; maxSize?: number },
 ) {
   if (!canvas) return null;
   const { objects } = await loadSVGFromString(svgText);
-  const valid = (objects || []).filter(Boolean) as FabricObject[];
+  const valid = (objects || [])
+    .filter(Boolean)
+    .filter((o) => !isOpaqueBackdropRect(o as FabricObject)) as FabricObject[];
   if (!valid.length) throw new Error('No drawable content in SVG');
 
   let target: FabricObject;
@@ -834,9 +911,11 @@ export async function addSvgToCanvas(
   return target;
 }
 
-const SHAPE_FILL = 'rgba(142, 197, 255, 0.18)';
-const SHAPE_STROKE = '#8ec5ff';
-const LINE_STROKE = '#e5e7eb';
+/** Deepest black — default for every new shape / line / arrow on the artboard */
+const DEEP_BLACK = '#000000';
+const SHAPE_FILL = DEEP_BLACK;
+const SHAPE_STROKE = DEEP_BLACK;
+const LINE_STROKE = DEEP_BLACK;
 
 function regularPolygon(sides: number, r: number): { x: number; y: number }[] {
   const pts: { x: number; y: number }[] = [];
@@ -874,7 +953,7 @@ export function addText(text = 'Label') {
     originY: 'center',
     fontFamily: 'Inter, system-ui, sans-serif',
     fontSize: 24,
-    fill: '#f0f2f5',
+    fill: DEEP_BLACK,
     editable: true,
   });
   ensureMeta(t, 'Text');

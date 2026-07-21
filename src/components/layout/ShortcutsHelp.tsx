@@ -2,6 +2,7 @@ import { useAppStore } from '../../store/appStore';
 
 const ROWS: [string, string][] = [
   ['V', 'Icon library'],
+  ['C', 'Chem draw (RDKit)'],
   ['A', 'AI import (MCP)'],
   ['M', 'Templates'],
   ['P', 'PDB / UniProt'],

@@ -1,12 +1,4 @@
 import {
-  AlignCenterHorizontal,
-  AlignCenterVertical,
-  AlignEndHorizontal,
-  AlignEndVertical,
-  AlignHorizontalDistributeCenter,
-  AlignStartHorizontal,
-  AlignStartVertical,
-  AlignVerticalDistributeCenter,
   CircleHelp,
   Columns3,
   Download,
@@ -21,9 +13,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import {
-  alignSelection,
   bringForward,
-  distributeSelection,
   duplicateSelection,
   exportJSON,
   fitToScreen,
@@ -59,15 +49,18 @@ export function TopBar() {
   const artboardWidth = useAppStore((s) => s.artboardWidth);
   const artboardHeight = useAppStore((s) => s.artboardHeight);
   const setArtboardSize = useAppStore((s) => s.setArtboardSize);
-  const selectionCount = useAppStore((s) => s.selectionCount);
   const showGrid = useAppStore((s) => s.showGrid);
   const setShowGrid = useAppStore((s) => s.setShowGrid);
   const snapOn = useAppStore((s) => s.snapOn);
   const setSnapOn = useAppStore((s) => s.setSnapOn);
   const columnGuides = useAppStore((s) => s.columnGuides);
   const setColumnGuides = useAppStore((s) => s.setColumnGuides);
-  const canAlign = selectionCount >= 2;
-  const canDistribute = selectionCount >= 3;
+  const glassOpacity = useAppStore((s) => s.glassOpacity);
+  const setGlassOpacity = useAppStore((s) => s.setGlassOpacity);
+  const glassHue = useAppStore((s) => s.glassHue);
+  const setGlassHue = useAppStore((s) => s.setGlassHue);
+  const themeMode = useAppStore((s) => s.themeMode);
+  const setThemeMode = useAppStore((s) => s.setThemeMode);
 
   const onSave = () => {
     const data = exportJSON();
@@ -154,22 +147,20 @@ export function TopBar() {
         )}
       </select>
 
-      {/* Gridlines + column guides (next to artboard size) */}
-      <div className="ba-guides-box" title="Alignment helpers — not exported">
+      <div className="ba-topbar-group" title="Grid & snap">
         <button
-          className={`ba-btn ba-btn-sm ${showGrid ? 'active' : ''}`}
-          title="Show or hide the fine grid (visual only, not in export)"
+          className={`ba-btn ba-btn-icon ${showGrid ? 'active' : ''}`}
+          title="Show or hide grid"
           onClick={() => {
             setShowGrid(!showGrid);
             showToast(showGrid ? 'Grid hidden' : 'Grid shown');
           }}
         >
-          <Grid3x3 size={14} />
-          <span className="ba-topbar-label">{showGrid ? 'Grid on' : 'Grid off'}</span>
+          <Grid3x3 size={15} />
         </button>
         <button
           className={`ba-btn ba-btn-sm ${snapOn ? 'active' : ''}`}
-          title="Smart alignment guides: snap to edges, centers, and artboard middle while dragging"
+          title="Smart alignment guides"
           onClick={() => {
             const next = !snapOn;
             setSnapOn(next);
@@ -177,12 +168,9 @@ export function TopBar() {
             showToast(next ? 'Alignment guides on' : 'Alignment guides off');
           }}
         >
-          <span className="ba-topbar-label">Snap {snapOn ? 'on' : 'off'}</span>
-          <span className="ba-topbar-label-short" aria-hidden>
-            Snap
-          </span>
+          Snap
         </button>
-        <label className="ba-guides-columns" title="Split the artboard into equal vertical columns">
+        <label className="ba-guides-columns" title="Column guides">
           <Columns3 size={14} />
           <select
             className="ba-artboard-select"
@@ -190,24 +178,18 @@ export function TopBar() {
             onChange={(e) => {
               const n = Number(e.target.value);
               setColumnGuides(n);
-              showToast(
-                n === 0
-                  ? 'Column guides off'
-                  : `${n} vertical columns (imaginary guides)`,
-              );
+              showToast(n === 0 ? 'Column guides off' : `${n} vertical columns`);
             }}
           >
-            <option value={0}>No columns</option>
-            <option value={2}>2 columns</option>
-            <option value={3}>3 columns</option>
-            <option value={4}>4 columns</option>
-            <option value={5}>5 columns</option>
-            <option value={6}>6 columns</option>
+            <option value={0}>Cols</option>
+            <option value={2}>2</option>
+            <option value={3}>3</option>
+            <option value={4}>4</option>
+            <option value={5}>5</option>
+            <option value={6}>6</option>
           </select>
         </label>
       </div>
-
-      <div className="ba-topbar-sep" />
 
       <div className="ba-topbar-group">
         <button className="ba-btn ba-btn-icon" title="Undo (⌘Z)" disabled={!canUndo} onClick={() => undo()}>
@@ -218,18 +200,15 @@ export function TopBar() {
         </button>
       </div>
 
-      <div className="ba-topbar-sep" />
-
       <div className="ba-topbar-group">
         <button className="ba-btn ba-btn-icon" title="Zoom out" onClick={() => zoomBy(-0.1)}>
           <ZoomOut size={16} />
         </button>
         <button
           className="ba-btn ba-btn-sm"
-          title="Fit artboard to window (resets pan/zoom)"
+          title="Fit artboard to window"
           onClick={() => {
             fitToScreen();
-            // Dispatch a resize so FabricCanvas recomputes display scale
             window.dispatchEvent(new Event('resize'));
             showToast('Fitted to window');
           }}
@@ -241,8 +220,6 @@ export function TopBar() {
         </button>
       </div>
 
-      <div className="ba-topbar-sep" />
-
       <div className="ba-topbar-group">
         <button className="ba-btn ba-btn-icon" title="Group (⌘G)" onClick={() => groupSelection()}>
           <Group size={16} />
@@ -251,65 +228,71 @@ export function TopBar() {
           <Ungroup size={16} />
         </button>
         <button className="ba-btn ba-btn-sm" title="Bring forward" onClick={() => bringForward()}>
-          <span className="ba-topbar-label">Fwd</span>
-          <span className="ba-topbar-label-short" aria-hidden>
-            ↑
-          </span>
+          Fwd
         </button>
         <button className="ba-btn ba-btn-sm" title="Send backward" onClick={() => sendBackward()}>
-          <span className="ba-topbar-label">Back</span>
-          <span className="ba-topbar-label-short" aria-hidden>
-            ↓
-          </span>
+          Back
         </button>
         <button className="ba-btn ba-btn-sm" title="Copy selection (⌘D)" onClick={() => duplicateSelection()}>
-          <span className="ba-topbar-label">Copy</span>
-          <span className="ba-topbar-label-short" aria-hidden>
-            ⎘
+          Copy
+        </button>
+      </div>
+
+      <div className="ba-topbar-spacer" aria-hidden />
+
+      <div className="ba-glass-controls" title="Liquid glass theme">
+        <div className="ba-theme-toggle" role="group" aria-label="App theme">
+          <button
+            type="button"
+            className={`ba-theme-toggle-btn ${themeMode === 'light' ? 'active' : ''}`}
+            onClick={() => setThemeMode('light')}
+            title="Light frosted glass"
+          >
+            Light
+          </button>
+          <button
+            type="button"
+            className={`ba-theme-toggle-btn ${themeMode === 'dark' ? 'active' : ''}`}
+            onClick={() => setThemeMode('dark')}
+            title="Dark liquid glass"
+          >
+            Dark
+          </button>
+        </div>
+        <div className="ba-glass-control-divider" aria-hidden />
+        <label className="ba-glass-slider">
+          <span className="ba-glass-slider-head">
+            <span>Opacity</span>
+            <span>{Math.round(glassOpacity * 100)}%</span>
           </span>
-        </button>
+          <input
+            type="range"
+            min={0}
+            max={0.5}
+            step={0.01}
+            value={glassOpacity}
+            onChange={(e) => setGlassOpacity(Number(e.target.value))}
+            aria-label="Glass opacity 0 to 50 percent"
+          />
+        </label>
+        <div className="ba-glass-control-divider" aria-hidden />
+        <label className="ba-glass-slider">
+          <span className="ba-glass-slider-head">
+            <span>Hue</span>
+            <span>{glassHue}°</span>
+          </span>
+          <input
+            type="range"
+            className="ba-glass-hue"
+            min={0}
+            max={359}
+            step={1}
+            value={glassHue}
+            onChange={(e) => setGlassHue(Number(e.target.value))}
+            aria-label="Glass hue tint"
+          />
+        </label>
       </div>
-
-      <div className="ba-topbar-sep" />
-
-      <div className="ba-topbar-group">
-        <button className="ba-btn ba-btn-icon" title="Align left (select 2+)" disabled={!canAlign} onClick={() => alignSelection('left')}>
-          <AlignStartVertical size={16} />
-        </button>
-        <button className="ba-btn ba-btn-icon" title="Align center (select 2+)" disabled={!canAlign} onClick={() => alignSelection('center')}>
-          <AlignCenterVertical size={16} />
-        </button>
-        <button className="ba-btn ba-btn-icon" title="Align right (select 2+)" disabled={!canAlign} onClick={() => alignSelection('right')}>
-          <AlignEndVertical size={16} />
-        </button>
-        <button className="ba-btn ba-btn-icon" title="Align top (select 2+)" disabled={!canAlign} onClick={() => alignSelection('top')}>
-          <AlignStartHorizontal size={16} />
-        </button>
-        <button className="ba-btn ba-btn-icon" title="Align middle (select 2+)" disabled={!canAlign} onClick={() => alignSelection('middle')}>
-          <AlignCenterHorizontal size={16} />
-        </button>
-        <button className="ba-btn ba-btn-icon" title="Align bottom (select 2+)" disabled={!canAlign} onClick={() => alignSelection('bottom')}>
-          <AlignEndHorizontal size={16} />
-        </button>
-        <button
-          className="ba-btn ba-btn-icon"
-          title="Even horizontal spacing — select 3+ objects first (not charts)"
-          disabled={!canDistribute}
-          onClick={() => distributeSelection('horizontal')}
-        >
-          <AlignHorizontalDistributeCenter size={16} />
-        </button>
-        <button
-          className="ba-btn ba-btn-icon"
-          title="Even vertical spacing — select 3+ objects first (not charts)"
-          disabled={!canDistribute}
-          onClick={() => distributeSelection('vertical')}
-        >
-          <AlignVerticalDistributeCenter size={16} />
-        </button>
-      </div>
-
-      <div className="ba-topbar-spacer" />
 
       <div className="ba-topbar-group">
         <button className="ba-btn ba-btn-icon" title="Shortcuts (?)" onClick={() => setHelpOpen(true)}>

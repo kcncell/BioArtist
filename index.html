@@ -12,12 +12,17 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,450;14..32,500;14..32,600;14..32,650;14..32,700&display=swap"
       rel="stylesheet"
     />
   </head>
   <body>
     <div id="root"></div>
+    <!-- Node-ish shims for Ketcher / indigo-ketcher (Chem Studio) -->
+    <script>
+      window.global = window.global || window;
+      window.process = window.process || { env: { NODE_ENV: 'development', PUBLIC_URL: '' } };
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

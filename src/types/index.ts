@@ -9,7 +9,8 @@ export type ToolId =
   | 'text'
   | 'templates'
   | 'pdb'
-  | 'ai';
+  | 'ai'
+  | 'chem';
 export type LibraryTab = 'library' | 'uploads';
 
 /** User-imported figure template (canvas snapshot) */
@@ -130,6 +131,12 @@ export interface AppState {
   showGrid: boolean;
   snapOn: boolean;
   columnGuides: number;
+  /** Glass pane opacity 0–0.5 (0–50% frost) */
+  glassOpacity: number;
+  /** Glass tint hue 0–360 */
+  glassHue: number;
+  /** App chrome theme: dark liquid glass or light frosted */
+  themeMode: 'dark' | 'light';
 }
 
 export type FabricCanvas = Canvas;

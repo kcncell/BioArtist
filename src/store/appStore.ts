@@ -9,13 +9,20 @@ import {
   idbSaveTemplates,
   loadFavorites,
   loadFavoritesDockOpen,
+  loadGlassHue,
+  loadGlassOpacity,
   loadPinnedIconIds,
   loadPinnedTemplateIds,
+  loadThemeMode,
   saveFavorites,
   saveFavoritesDockOpen,
+  saveGlassHue,
+  saveGlassOpacity,
   savePinnedIconIds,
   savePinnedTemplateIds,
+  saveThemeMode,
 } from '../lib/storage';
+import { applyGlassTheme } from '../lib/glassTheme';
 import type {
   AppState,
   LayerInfo,
@@ -59,6 +66,9 @@ export interface AppActions {
   setShowGrid: (on: boolean) => void;
   setSnapOn: (on: boolean) => void;
   setColumnGuides: (n: number) => void;
+  setGlassOpacity: (n: number) => void;
+  setGlassHue: (n: number) => void;
+  setThemeMode: (mode: 'dark' | 'light') => void;
   hydrateLibrary: () => Promise<void>;
 }
 
@@ -91,6 +101,9 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
   showGrid: true,
   snapOn: true,
   columnGuides: 0,
+  glassOpacity: typeof window !== 'undefined' ? loadGlassOpacity() : 0.22,
+  glassHue: typeof window !== 'undefined' ? loadGlassHue() : 220,
+  themeMode: typeof window !== 'undefined' ? loadThemeMode() : 'dark',
 
   setTool: (tool) => {
     if (tool === 'library' || tool === 'uploads') {
@@ -216,6 +229,27 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
   setSnapOn: (snapOn) => set({ snapOn }),
   setColumnGuides: (columnGuides) =>
     set({ columnGuides: Math.max(0, Math.min(12, Math.round(columnGuides))) }),
+  setGlassOpacity: (n) => {
+    const glassOpacity = Math.min(0.5, Math.max(0, n));
+    saveGlassOpacity(glassOpacity);
+    const { glassHue, themeMode } = get();
+    applyGlassTheme(glassOpacity, glassHue, themeMode);
+    set({ glassOpacity });
+  },
+  setGlassHue: (n) => {
+    const glassHue = ((Math.round(n) % 360) + 360) % 360;
+    saveGlassHue(glassHue);
+    const { glassOpacity, themeMode } = get();
+    applyGlassTheme(glassOpacity, glassHue, themeMode);
+    set({ glassHue });
+  },
+  setThemeMode: (mode) => {
+    const themeMode = mode === 'light' ? 'light' : 'dark';
+    saveThemeMode(themeMode);
+    const { glassOpacity, glassHue } = get();
+    applyGlassTheme(glassOpacity, glassHue, themeMode);
+    set({ themeMode });
+  },
   hydrateLibrary: async () => {
     const [items, templates, pinned, pinnedIcons, favorites, dockOpen] = await Promise.all([
       idbLoadLibrary(),
@@ -225,6 +259,10 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
       Promise.resolve(loadFavorites()),
       Promise.resolve(loadFavoritesDockOpen()),
     ]);
+    const glassOpacity = loadGlassOpacity();
+    const glassHue = loadGlassHue();
+    const themeMode = loadThemeMode();
+    applyGlassTheme(glassOpacity, glassHue, themeMode);
     set({
       userLibrary: items.length ? items : get().userLibrary,
       userTemplates: templates,
@@ -232,6 +270,9 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
       pinnedIconIds: pinnedIcons,
       favorites,
       favoritesDockOpen: dockOpen,
+      glassOpacity,
+      glassHue,
+      themeMode,
     });
   },
 }));

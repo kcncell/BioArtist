@@ -79,6 +79,11 @@ export function KeyboardShortcuts() {
         return;
       }
 
+      if (!typing && (e.key === 'c' || e.key === 'C') && !mod) {
+        useAppStore.getState().setTool('chem');
+        return;
+      }
+
       if (mod && e.key.toLowerCase() === 'z' && !e.shiftKey) {
         e.preventDefault();
         void undo();

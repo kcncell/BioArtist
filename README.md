@@ -7,14 +7,18 @@
 ## Quick start
 
 ```bash
-cd /Users/pradyu/GitHub/BioArtist
+git clone https://github.com/kcncell/BioArtist.git
+cd BioArtist
 npm install
 npm run dev
 ```
 
 Open the URL Vite prints (usually `http://localhost:5173`).
 
-Theme: **flowery pink** (accent `#db2777`).  
+- **Figure editor:** `/`
+- **Chem Studio** (Ketcher sketcher): `/chem`
+
+Theme: liquid glass (Light/Dark + opacity/hue in the top bar).  
 Projects save as **`.ba`** files.
 
 ## Docs for researchers
@@ -38,8 +42,8 @@ Yes — supported. Start with **[docs/MCP.md](./docs/MCP.md)** (technical notes 
 
 ```bash
 npm run mcp:install
-# Configure Claude Desktop / Cursor / Grok to run:
-# node /Users/pradyu/GitHub/BioArtist/mcp-server/src/index.js
+# Configure Claude Desktop / Cursor / Grok to run (use YOUR absolute path):
+# node /absolute/path/to/BioArtist/mcp-server/src/index.js
 ```
 
 Desktop agent calls `create_scientific_svg` → files land in `public/mcp-inbox/` → BioArtist **My Library → Sync MCP inbox**.

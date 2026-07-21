@@ -23,6 +23,7 @@ import { readSvgFiles, svgToThumbDataUrl } from '../../lib/svgImport';
 import { useAppStore } from '../../store/appStore';
 import { ContextMenu } from '../ui/ContextMenu';
 import { AiPanel } from './AiPanel';
+import { ChemPanel } from './ChemPanel';
 import { PackCards } from './PackCards';
 import { PdbPanel } from './PdbPanel';
 import { ShapeLinePanel } from './ShapeLinePanel';
@@ -266,7 +267,10 @@ export function LibraryPanel() {
     setCtxMenu({ x: e.clientX, y: e.clientY, icon });
   };
 
-  // Drawing / template / PDB / AI tools take over the left panel
+  // Drawing / template / PDB / AI / Chem tools take over the left panel
+  if (tool === 'chem') {
+    return <ChemPanel />;
+  }
   if (tool === 'ai') {
     return <AiPanel />;
   }

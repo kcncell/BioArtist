@@ -1,4 +1,12 @@
-import { ChevronRight, LayoutTemplate, Shapes, Sparkles, Star, Type } from 'lucide-react';
+import {
+  ChevronRight,
+  Hexagon,
+  LayoutTemplate,
+  Shapes,
+  Sparkles,
+  Star,
+  Type,
+} from 'lucide-react';
 import { useAppStore } from '../../store/appStore';
 import type { ToolId } from '../../types';
 
@@ -24,6 +32,12 @@ function LinesRailIcon() {
 }
 
 const TOOLS: { id: ToolId; label: string; tip: string; icon: React.ReactNode }[] = [
+  {
+    id: 'chem',
+    label: 'Chem',
+    tip: 'Chem',
+    icon: <Hexagon size={18} strokeWidth={1.75} />,
+  },
   {
     id: 'ai',
     label: 'AI',
