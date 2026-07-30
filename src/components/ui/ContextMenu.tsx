@@ -1,4 +1,10 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  forwardRef,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
 
 type Props = {
@@ -12,18 +18,26 @@ type Props = {
  * Viewport-anchored context menu. Portaled to document.body so parent
  * overflow / backdrop-filter do not clip or offset it.
  */
-export function ContextMenu({ x, y, children }: Props) {
-  const ref = useRef<HTMLDivElement>(null);
+export const ContextMenu = forwardRef<HTMLDivElement, Props>(function ContextMenu(
+  { x, y, children },
+  forwardedRef,
+) {
+  const localRef = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState({ left: x, top: y, ready: false });
 
+  const setRefs = (node: HTMLDivElement | null) => {
+    localRef.current = node;
+    if (typeof forwardedRef === 'function') forwardedRef(node);
+    else if (forwardedRef) forwardedRef.current = node;
+  };
+
   useLayoutEffect(() => {
-    const el = ref.current;
+    const el = localRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const pad = 8;
     let left = x;
     let top = y;
-    // Prefer opening to the right/below the cursor; flip if it would overflow
     if (left + rect.width > window.innerWidth - pad) {
       left = Math.max(pad, x - rect.width);
     }
@@ -43,14 +57,15 @@ export function ContextMenu({ x, y, children }: Props) {
 
   return createPortal(
     <div
-      ref={ref}
+      ref={setRefs}
       className="ba-ctx-menu"
       style={{
         left: pos.left,
         top: pos.top,
-        // Hide until measured to avoid a one-frame flash at the wrong place
         visibility: pos.ready ? 'visible' : 'hidden',
       }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
       role="menu"
@@ -59,4 +74,4 @@ export function ContextMenu({ x, y, children }: Props) {
     </div>,
     document.body,
   );
-}
+});

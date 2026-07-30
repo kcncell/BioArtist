@@ -8,6 +8,11 @@ import { ShortcutsHelp } from './components/layout/ShortcutsHelp';
 import { StatusBar } from './components/layout/StatusBar';
 import { TopBar } from './components/layout/TopBar';
 import { LibraryPanel } from './components/library/LibraryPanel';
+import {
+  type ChemClipboardPayload,
+  type ChemLibraryMsg,
+  seedChemClipboardMemory,
+} from './lib/chemLibrary';
 import { applyGlassTheme } from './lib/glassTheme';
 import { useAppStore } from './store/appStore';
 
@@ -21,6 +26,35 @@ export default function App() {
   useEffect(() => {
     applyGlassTheme(glassOpacity, glassHue, themeMode);
   }, [glassOpacity, glassHue, themeMode]);
+
+  // Keep Chem Studio → figure clipboard warm across tabs
+  useEffect(() => {
+    let ch: BroadcastChannel | null = null;
+    try {
+      ch = new BroadcastChannel('bioartist-chem');
+      ch.onmessage = (ev: MessageEvent<ChemLibraryMsg>) => {
+        if (ev.data?.type === 'chem-clipboard' && ev.data.payload) {
+          seedChemClipboardMemory(ev.data.payload as ChemClipboardPayload);
+        }
+      };
+    } catch {
+      /* ignore */
+    }
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'bioartist-chem-clipboard-v1' && e.newValue) {
+        try {
+          seedChemClipboardMemory(JSON.parse(e.newValue) as ChemClipboardPayload);
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      ch?.close();
+    };
+  }, []);
 
   return (
     <div className="ba-app">

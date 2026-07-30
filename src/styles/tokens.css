@@ -2239,12 +2239,102 @@ button:disabled {
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
 }
 
+.ba-ketcher-slot {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
 .ba-ketcher-host,
 .ba-ketcher-root {
   flex: 1;
   min-height: 0;
   width: 100%;
   height: 100%;
+}
+
+/* Full main-canvas styled molecule view (ball-stick / CPK / wire) */
+.ba-chem-style-canvas {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+}
+
+.ba-chem-style-canvas-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  background: #f0f2f5;
+}
+
+.ba-chem-style-canvas-badge {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: #1d1d1f;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #e8e8ed;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.ba-chem-style-canvas-stage {
+  flex: 1;
+  min-height: 280px;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  overflow: auto;
+  background:
+    radial-gradient(circle at 50% 45%, #fafafa 0%, #f0f0f2 70%, #e8e8ec 100%);
+}
+
+.ba-chem-style-canvas-img {
+  max-width: min(92%, 640px);
+  max-height: min(88%, 520px);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.06);
+  padding: 10px;
+  transform-origin: center center;
+  transition: transform 0.05s linear;
+  will-change: transform;
+}
+
+.ba-chem-zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.ba-chem-zoom-label {
+  min-width: 44px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #3a3a3c;
+}
+
+.ba-chem-zoom-hint {
+  font-size: 10px;
+  color: #6e6e73;
+  padding: 4px 12px 8px;
+  text-align: center;
+  background: #f0f2f5;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 .ba-chem-studio-loading,
@@ -2310,6 +2400,88 @@ button:disabled {
   border-color: var(--ba-accent-border);
   background: var(--ba-accent-soft);
   box-shadow: var(--ba-glass-highlight);
+}
+
+.ba-chem-style-card:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.ba-chem-studio-style-note {
+  margin: 0 12px 10px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--ba-text-muted);
+}
+
+.ba-chem-fav-add {
+  margin: 0 12px 8px;
+  width: calc(100% - 24px);
+  justify-content: center;
+}
+
+.ba-chem-fav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px 10px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.ba-chem-fav-item {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.ba-chem-fav-thumb {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--ba-radius-sm);
+  border: 1px solid var(--ba-border);
+  background: var(--ba-surface-2);
+  color: var(--ba-text);
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+
+.ba-chem-fav-thumb:hover {
+  border-color: var(--ba-accent-border);
+  background: var(--ba-accent-soft);
+}
+
+.ba-chem-fav-thumb img {
+  width: 40px;
+  height: 32px;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.ba-chem-fav-thumb span {
+  font-size: 11px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ba-chem-fav-del {
+  flex-shrink: 0;
+  color: var(--ba-text-muted);
+}
+
+.ba-chem-studio-note code {
+  font-size: 10px;
+  background: var(--ba-surface-2);
+  padding: 1px 4px;
+  border-radius: 3px;
 }
 
 .ba-chem-studio-side .ba-chem-smiles-input {
@@ -2799,6 +2971,9 @@ button:disabled {
 }
 
 .ba-ctx-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   text-align: left;
   padding: 8px 10px;
   border-radius: 4px;
@@ -2807,6 +2982,7 @@ button:disabled {
   background: transparent;
   border: none;
   cursor: pointer;
+  width: 100%;
 }
 
 .ba-ctx-menu button:hover:not(:disabled) {
@@ -2822,6 +2998,25 @@ button:disabled {
 .ba-ctx-menu button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.ba-ctx-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--ba-border);
+  flex-shrink: 0;
+}
+
+.ba-ctx-kbd {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--ba-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: 0.02em;
+}
+
+.ba-ctx-menu button:hover:not(:disabled) .ba-ctx-kbd {
+  color: var(--ba-accent);
 }
 
 .ba-help-grid {

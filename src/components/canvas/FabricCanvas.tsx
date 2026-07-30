@@ -10,11 +10,14 @@ import {
   fetchSvgText,
   fitToScreen,
   getLayers,
+  getSelectionCount,
   getSelectionProps,
   getZoom,
   importJSON,
   initCanvas,
   panBy,
+  bindCanvasContextMenu,
+  selectTargetAtEvent,
   setArtboardSize as setCanvasArtboard,
   setCanvasListeners,
   setZoom,
@@ -22,6 +25,10 @@ import {
 import { parseIconDragData } from '../../lib/iconDrag';
 import { readSvgFiles } from '../../lib/svgImport';
 import { loadDraft, saveDraft, useAppStore } from '../../store/appStore';
+import {
+  CanvasContextMenu,
+  type CanvasCtxMenuState,
+} from './CanvasContextMenu';
 import { FavoritesDock } from './FavoritesDock';
 
 export function FabricCanvas() {
@@ -47,6 +54,7 @@ export function FabricCanvas() {
   const panning = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
   const [fitScale, setFitScale] = useState(1);
+  const [ctxMenu, setCtxMenu] = useState<CanvasCtxMenuState | null>(null);
 
   const updateFitScale = useCallback(() => {
     const el = workspaceRef.current;
@@ -73,6 +81,23 @@ export function FabricCanvas() {
       onHistory: (u, r) => setHistoryFlags(u, r),
       onZoom: (z) => setZoomState(z),
       onObjectCount: (n) => setObjectCount(n),
+    });
+
+    // Native right-click on Fabric upper canvas (React bubble alone is unreliable)
+    const unbindCtx = bindCanvasContextMenu((e) => {
+      try {
+        const onObject = selectTargetAtEvent(e);
+        const { count, props, selectedIds } = getSelectionProps();
+        setSelection(count, props, selectedIds);
+        setCtxMenu({
+          x: e.clientX,
+          y: e.clientY,
+          onObject: onObject || count > 0,
+        });
+      } catch (err) {
+        console.error('context menu', err);
+        setCtxMenu({ x: e.clientX, y: e.clientY, onObject: false });
+      }
     });
 
     void useAppStore.getState().hydrateLibrary();
@@ -128,6 +153,7 @@ export function FabricCanvas() {
     window.addEventListener('keyup', onKeyUp);
 
     return () => {
+      unbindCtx();
       window.clearInterval(autosave);
       window.removeEventListener('beforeunload', onBeforeUnload);
       window.removeEventListener('keydown', onKeyDown);
@@ -288,6 +314,25 @@ export function FabricCanvas() {
   const stageW = Math.round(artboardWidth * fitScale);
   const stageH = Math.round(artboardHeight * fitScale);
 
+  const onContextMenu = (e: React.MouseEvent) => {
+    // Fallback for right-clicks that hit stage chrome / empty overlay (not fabric upper canvas)
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      const onObject = selectTargetAtEvent(e.nativeEvent);
+      const { count, props, selectedIds } = getSelectionProps();
+      setSelection(count, props, selectedIds);
+      setCtxMenu({
+        x: e.clientX,
+        y: e.clientY,
+        onObject: onObject || getSelectionCount() > 0,
+      });
+    } catch (err) {
+      console.error(err);
+      setCtxMenu({ x: e.clientX, y: e.clientY, onObject: false });
+    }
+  };
+
   return (
     <div
       ref={workspaceRef}
@@ -299,7 +344,11 @@ export function FabricCanvas() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
     >
-      <div className="ba-canvas-stage" style={{ width: stageW, height: stageH }}>
+      <div
+        className="ba-canvas-stage"
+        style={{ width: stageW, height: stageH }}
+        onContextMenu={onContextMenu}
+      >
         <div
           ref={wrapRef}
           className={`ba-canvas-wrap ${showGrid ? 'ba-grid' : ''}`}
@@ -351,6 +400,8 @@ export function FabricCanvas() {
       </div>
 
       <FavoritesDock />
+
+      <CanvasContextMenu menu={ctxMenu} onClose={() => setCtxMenu(null)} />
     </div>
   );
 }

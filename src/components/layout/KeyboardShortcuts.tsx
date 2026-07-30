@@ -1,19 +1,24 @@
 import { useEffect } from 'react';
 import {
   addText,
+  copySelectionToClipboard,
+  cutSelectionToClipboard,
   deleteSelection,
   duplicateSelection,
   exportJSON,
   groupSelection,
+  hasObjectClipboard,
+  pasteObjectClipboard,
   redo,
   undo,
   ungroupSelection,
 } from '../../lib/canvasController';
 import {
-  clipboardLooksPasteable,
+  allTextCandidates,
+  enrichSnapFromAsyncClipboard,
   pasteOntoCanvas,
   pasteResultToLibraryIcon,
-  resolveClipboardSnapshot,
+  resolveChemStudioOrClipboard,
   snapshotClipboard,
 } from '../../lib/clipboardPaste';
 import { downloadText } from '../../lib/export';
@@ -102,6 +107,22 @@ export function KeyboardShortcuts() {
         return;
       }
 
+      // Cut / Copy canvas objects (⌘X / ⌘C)
+      if (!typing && mod && e.key.toLowerCase() === 'x') {
+        e.preventDefault();
+        void cutSelectionToClipboard().then((ok) => {
+          useAppStore.getState().showToast(ok ? 'Cut' : 'Nothing to cut');
+        });
+        return;
+      }
+      if (!typing && mod && e.key.toLowerCase() === 'c' && !e.shiftKey) {
+        e.preventDefault();
+        void copySelectionToClipboard().then((ok) => {
+          useAppStore.getState().showToast(ok ? 'Copied' : 'Nothing to copy');
+        });
+        return;
+      }
+
       if (mod && e.key.toLowerCase() === 'g' && !e.shiftKey) {
         e.preventDefault();
         groupSelection();
@@ -150,18 +171,48 @@ export function KeyboardShortcuts() {
     const onPaste = (e: ClipboardEvent) => {
       if (isTypingTarget(e.target)) return;
 
-      // Must snapshot before any await — clipboardData dies after the handler returns
-      const snap = snapshotClipboard(e);
-      if (!clipboardLooksPasteable(snap)) return;
+      // Snapshot sync types first (clipboardData dies after this handler returns)
+      let snap = snapshotClipboard(e);
 
+      // Always handle paste on canvas so we can try async clipboard + RDKit
       e.preventDefault();
       e.stopPropagation();
 
       void (async () => {
         try {
-          const result = await resolveClipboardSnapshot(snap);
+          // 1) Chem Studio bridge first (Copy for figure / Ketcher copy)
+          //    Must beat canvas object-clipboard so studio → figure always works.
+          let snap2 = snap;
+          if (!snap2.plain.trim()) {
+            snap2 = await enrichSnapFromAsyncClipboard(snap2);
+          }
+          useAppStore.getState().showToast('Pasting…');
+          let result = await resolveChemStudioOrClipboard(snap2);
+
+          // 2) Internal canvas object cut/copy buffer
+          if (result.kind === 'none' && hasObjectClipboard()) {
+            const ok = await pasteObjectClipboard();
+            if (ok) {
+              useAppStore.getState().showToast('Pasted');
+              return;
+            }
+          }
+
           if (result.kind === 'none') {
-            useAppStore.getState().showToast('Clipboard has no SVG or image to paste');
+            // One more async clipboard read
+            snap2 = await enrichSnapFromAsyncClipboard(snap2);
+            result = await resolveChemStudioOrClipboard(snap2);
+          }
+
+          if (result.kind === 'none') {
+            const hint = allTextCandidates(snap2)[0]?.slice(0, 60);
+            useAppStore
+              .getState()
+              .showToast(
+                hint
+                  ? `Could not paste (“${hint}…”). In Chem Studio use right-click → Copy for figure.`
+                  : 'Nothing to paste. Chem Studio: right-click → Copy for figure, then paste here.',
+              );
             return;
           }
 
@@ -177,13 +228,17 @@ export function KeyboardShortcuts() {
           }
 
           const label =
-            result.kind === 'svg'
-              ? `Pasted SVG “${result.name || 'icon'}” onto canvas (+ My Library)`
-              : `Pasted image onto canvas (+ My Library)`;
+            result.kind === 'chem'
+              ? `Pasted molecule “${result.name || 'structure'}” onto canvas`
+              : result.kind === 'svg'
+                ? `Pasted SVG “${result.name || 'icon'}” onto canvas (+ My Library)`
+                : `Pasted image onto canvas (+ My Library)`;
           useAppStore.getState().showToast(label);
         } catch (err) {
           console.error(err);
-          useAppStore.getState().showToast('Paste failed — try Import SVG instead');
+          useAppStore
+            .getState()
+            .showToast('Paste failed — Chem Studio: Copy for figure, then try again');
         }
       })();
     };

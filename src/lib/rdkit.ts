@@ -17,9 +17,13 @@ export type RDKitMol = {
   has_coords?: () => boolean;
   set_new_coords?: (useCoordGen?: boolean) => boolean;
   get_smiles: () => string;
+  get_molblock?: () => string;
   get_svg: (width?: number, height?: number) => string;
   get_svg_with_highlights: (details: string) => string;
 };
+
+/** Drawing styles for Chem Studio preview / figure export */
+export type ChemDrawStyle = '2d' | 'ballstick' | 'cpk' | 'wire';
 
 type InitFn = (options?: { locateFile?: (file: string) => string }) => Promise<RDKitModule>;
 
@@ -77,10 +81,63 @@ export type DrawMolOptions = {
    */
   acs?: boolean;
   /**
+   * Visual style: 2d ACS · ball-and-stick · CPK space-fill · CPK wireframe.
+   * Default '2d'.
+   */
+  style?: ChemDrawStyle;
+  /**
    * When true (default), SVG has no opaque plate so canvas layering stays clean.
    * UI thumbs use a CSS white card behind the transparent SVG.
    */
   transparent?: boolean;
+};
+
+/**
+ * CPK (Corey–Pauling–Koltun) coloring — Wikipedia / Rasmol / Jmol standard.
+ * Used for ball-and-stick atom spheres (and half-bonds when desired).
+ * @see https://en.wikipedia.org/wiki/CPK_coloring
+ */
+export const CPK_COLORS: Record<string, string> = {
+  H: '#FFFFFF',
+  C: '#909090', // light gray (classic CPK carbon)
+  N: '#3050F8', // blue
+  O: '#FF0D0D', // red
+  F: '#90E050', // green
+  Cl: '#1FF01F',
+  Br: '#A62929',
+  I: '#940094',
+  P: '#FF8000', // orange
+  S: '#FFFF30', // yellow
+  B: '#FFB5B5',
+  He: '#D9FFFF',
+  Li: '#CC80FF',
+  Be: '#C2FF00',
+  Na: '#AB5CF2',
+  Mg: '#8AFF00',
+  Al: '#BFA6A6',
+  Si: '#F0C8A0',
+  K: '#8F40D4',
+  Ca: '#3DFF00',
+  Fe: '#E06633',
+  Zn: '#7D80B0',
+  default: '#FF1493',
+};
+
+/** Covalent radii (Å) — ball size in ball-and-stick (~not full VdW) */
+const COVALENT_R: Record<string, number> = {
+  H: 0.31,
+  C: 0.76,
+  N: 0.71,
+  O: 0.66,
+  F: 0.57,
+  Cl: 0.99,
+  Br: 1.14,
+  I: 1.33,
+  P: 1.07,
+  S: 1.05,
+  B: 0.84,
+  Si: 1.11,
+  default: 0.75,
 };
 
 /** RDKit WASM is not re-entrant — serialize all mol draw calls. */
@@ -96,9 +153,252 @@ function enqueueDraw<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
+type Atom2D = { x: number; y: number; el: string; i: number };
+type Bond2D = { a: number; b: number; order: number };
+
+/** Normalize element symbol (C, N, Cl, …). */
+function normEl(raw: string): string {
+  const s = raw.replace(/[^A-Za-z]/g, '');
+  if (!s) return 'C';
+  if (s.length === 1) return s.toUpperCase();
+  return s[0].toUpperCase() + s.slice(1).toLowerCase();
+}
+
 /**
- * Draw a SMILES string to a clean SVG via RDKit (live — no image files).
- * Returns null if SMILES is invalid or RDKit fails.
+ * Parse V2000 molblock. Prefer fixed-width columns (MDL spec):
+ * x: 0–10, y: 10–20, z: 20–30, symbol: 31–34
+ */
+function parseMolblock2D(molblock: string): { atoms: Atom2D[]; bonds: Bond2D[] } | null {
+  const lines = molblock.replace(/\r\n/g, '\n').split('\n');
+  let countsIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].includes('V2000') || lines[i].includes('V3000')) {
+      countsIdx = i;
+      break;
+    }
+  }
+  if (countsIdx < 0) {
+    for (let i = 3; i < Math.min(lines.length, 10); i++) {
+      if (/^\s*\d+\s+\d+/.test(lines[i])) {
+        countsIdx = i;
+        break;
+      }
+    }
+  }
+  if (countsIdx < 0) return null;
+  const counts = lines[countsIdx].match(/^\s*(\d+)\s+(\d+)/);
+  if (!counts) return null;
+  const nAtoms = Number(counts[1]);
+  const nBonds = Number(counts[2]);
+  if (!nAtoms || nAtoms > 500) return null;
+
+  const atoms: Atom2D[] = [];
+  for (let i = 0; i < nAtoms; i++) {
+    const line = lines[countsIdx + 1 + i] || '';
+    // Fixed-width first (pad to length)
+    const padded = line.padEnd(40, ' ');
+    let x = Number(padded.slice(0, 10).trim());
+    let y = Number(padded.slice(10, 20).trim());
+    let el = padded.slice(31, 34).trim();
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !el) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 4) return null;
+      x = Number(parts[0]);
+      y = Number(parts[1]);
+      el = parts[3];
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    atoms.push({ x, y, el: normEl(el), i });
+  }
+
+  const bonds: Bond2D[] = [];
+  for (let i = 0; i < nBonds; i++) {
+    const line = (lines[countsIdx + 1 + nAtoms + i] || '').padEnd(20, ' ');
+    let a = Number(line.slice(0, 3).trim()) - 1;
+    let b = Number(line.slice(3, 6).trim()) - 1;
+    let order = Number(line.slice(6, 9).trim()) || 1;
+    if (!Number.isFinite(a) || !Number.isFinite(b) || a < 0) {
+      const parts = line.trim().split(/\s+/);
+      a = Number(parts[0]) - 1;
+      b = Number(parts[1]) - 1;
+      order = Number(parts[2]) || 1;
+    }
+    if (a >= 0 && b >= 0 && a < nAtoms && b < nAtoms) bonds.push({ a, b, order });
+  }
+  return { atoms, bonds };
+}
+
+function cpkColor(el: string): string {
+  const key = normEl(el);
+  return CPK_COLORS[key] || CPK_COLORS.default;
+}
+
+function covalentR(el: string): number {
+  const key = normEl(el);
+  return COVALENT_R[key] || COVALENT_R.default;
+}
+
+/**
+ * Ball-and-stick (2D projection of the classic model):
+ * - **Balls** = atom nuclei as small spheres colored with the CPK scheme
+ *   (C gray, O red, N blue, S yellow, H white, …).
+ * - **Sticks** = bonds as cylinders; each half of a stick takes the CPK color
+ *   of its endpoint atom (common educational depiction).
+ * Sphere radius uses covalent radii (not full VdW space-fill), so sticks stay visible.
+ */
+function buildBallStickSvg(
+  atoms: Atom2D[],
+  bonds: Bond2D[],
+  w: number,
+  h: number,
+): string {
+  if (!atoms.length) return '';
+
+  // Nucleus bbox in Å, expanded by ball radius so nothing clips
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const a of atoms) {
+    const r = covalentR(a.el) * 0.85;
+    minX = Math.min(minX, a.x - r);
+    maxX = Math.max(maxX, a.x + r);
+    minY = Math.min(minY, a.y - r);
+    maxY = Math.max(maxY, a.y + r);
+  }
+
+  const padPx = 20;
+  const spanX = Math.max(maxX - minX, 1);
+  const spanY = Math.max(maxY - minY, 1);
+  const scale = Math.min((w - padPx * 2) / spanX, (h - padPx * 2) / spanY);
+
+  const ox = (w - spanX * scale) / 2 - minX * scale;
+  const oy = (h + spanY * scale) / 2 + minY * scale;
+  const tx = (x: number) => ox + x * scale;
+  const ty = (y: number) => oy - y * scale;
+
+  const meanBondA =
+    bonds.length > 0
+      ? bonds.reduce((s, b) => {
+          const A = atoms[b.a];
+          const B = atoms[b.b];
+          return s + Math.hypot(A.x - B.x, A.y - B.y);
+        }, 0) / bonds.length
+      : 1.4;
+  const bondPx = meanBondA * scale;
+  // Stick thickness ~ 15% of bond length, capped
+  const stickW = Math.max(2.5, Math.min(6, bondPx * 0.16));
+
+  const parts: string[] = [];
+  parts.push(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid meet">`,
+  );
+  // Soft gray board so white H and yellow S stay visible
+  parts.push(`<rect x="0" y="0" width="${w}" height="${h}" fill="#e8eaed"/>`);
+
+  // Sticks first (under balls), half-colored CPK
+  for (const b of bonds) {
+    const A = atoms[b.a];
+    const B = atoms[b.b];
+    const x1 = tx(A.x);
+    const y1 = ty(A.y);
+    const x2 = tx(B.x);
+    const y2 = ty(B.y);
+    const mx = (x1 + x2) / 2;
+    const my = (y1 + y2) / 2;
+    const cA = cpkColor(A.el);
+    const cB = cpkColor(B.el);
+
+    const half = (x0: number, y0: number, x1b: number, y1b: number, col: string, width: number) => {
+      parts.push(
+        `<line x1="${x0}" y1="${y0}" x2="${x1b}" y2="${y1b}" stroke="${col}" stroke-width="${width}" stroke-linecap="butt"/>`,
+      );
+    };
+
+    const drawOrder = (off: number, width: number) => {
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const len = Math.hypot(dx, dy) || 1;
+      const px = (-dy / len) * off;
+      const py = (dx / len) * off;
+      half(x1 + px, y1 + py, mx + px, my + py, cA, width);
+      half(mx + px, my + py, x2 + px, y2 + py, cB, width);
+    };
+
+    drawOrder(0, stickW);
+    if (b.order >= 2) drawOrder(stickW * 1.15, stickW * 0.85);
+    if (b.order >= 3) drawOrder(stickW * 2.15, stickW * 0.75);
+  }
+
+  // Balls on top — covalent radius scaled; always dark outline for contrast
+  const sorted = [...atoms].sort((a, b) => a.y - b.y);
+  for (const a of sorted) {
+    const r = Math.max(3.5, covalentR(a.el) * 0.85 * scale);
+    const cx = tx(a.x);
+    const cy = ty(a.y);
+    const fill = cpkColor(a.el);
+    // Outer ring so light colors (H, S, C gray) read on any bg
+    parts.push(
+      `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}" stroke="#111111" stroke-width="${Math.max(1, r * 0.08)}"/>`,
+    );
+    // Specular highlight
+    parts.push(
+      `<circle cx="${cx - r * 0.28}" cy="${cy - r * 0.28}" r="${r * 0.3}" fill="rgba(255,255,255,0.55)"/>`,
+    );
+    // Heteroatom label
+    if (a.el !== 'C' && a.el !== 'H') {
+      const fs = Math.max(8, Math.min(13, r * 0.95));
+      const light = a.el === 'S' || a.el === 'F' || a.el === 'Cl' || a.el === 'Br';
+      parts.push(
+        `<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" font-family="Inter,system-ui,sans-serif" font-size="${fs}" font-weight="700" fill="${light ? '#111' : '#fff'}">${a.el}</text>`,
+      );
+    }
+  }
+
+  // Mini legend so users see CPK is intentional
+  const legend = [
+    ['C', CPK_COLORS.C],
+    ['N', CPK_COLORS.N],
+    ['O', CPK_COLORS.O],
+    ['S', CPK_COLORS.S],
+    ['H', CPK_COLORS.H],
+  ];
+  let lx = 12;
+  const ly = h - 14;
+  parts.push(
+    `<text x="12" y="${ly - 12}" font-family="system-ui,sans-serif" font-size="9" fill="#555">CPK ball &amp; stick</text>`,
+  );
+  for (const [sym, col] of legend) {
+    parts.push(
+      `<circle cx="${lx + 5}" cy="${ly}" r="5" fill="${col}" stroke="#111" stroke-width="0.6"/>`,
+    );
+    parts.push(
+      `<text x="${lx + 13}" y="${ly + 3}" font-family="system-ui,sans-serif" font-size="9" fill="#333">${sym}</text>`,
+    );
+    lx += 28;
+  }
+
+  parts.push('</svg>');
+  return parts.join('');
+}
+
+/** Dispatch styled SVG (currently ball-and-stick; other modes reuse it until implemented). */
+function buildStyledSvgFromCoords(
+  atoms: Atom2D[],
+  bonds: Bond2D[],
+  style: ChemDrawStyle,
+  w: number,
+  h: number,
+  _transparent: boolean,
+): string {
+  // Focus: CPK ball-and-stick. Other styles fall through to the same model for now.
+  void style;
+  return buildBallStickSvg(atoms, bonds, w, h);
+}
+
+/**
+ * Draw a SMILES / molfile string to a clean SVG via RDKit (live — no image files).
+ * Returns null if structure is invalid or RDKit fails.
  */
 export async function smilesToSvg(
   smiles: string,
@@ -116,10 +416,13 @@ export async function smilesToSvg(
         return null;
       }
 
-      // Fresh 2D layout — CoordGen when ACS mode for more regular geometry
+      const style: ChemDrawStyle = opts.style || (opts.acs === false ? '2d' : '2d');
+      const useAcsLayout = style === '2d' || opts.acs !== false;
+
+      // Fresh 2D layout — CoordGen for ACS-regular geometry
       if (typeof mol.set_new_coords === 'function') {
         try {
-          mol.set_new_coords(!!opts.acs);
+          mol.set_new_coords(useAcsLayout);
         } catch {
           try {
             mol.set_new_coords();
@@ -132,36 +435,59 @@ export async function smilesToSvg(
       const w = opts.width ?? 200;
       const h = opts.height ?? 160;
       const color = opts.color ?? '#000000';
-      const acs = !!opts.acs;
-      // Default transparent so placed molecules don't mask other objects
       const transparent = opts.transparent !== false;
+
+      // Custom SVG for ballstick / cpk / wire (from molblock coords)
+      if (style === 'ballstick' || style === 'cpk' || style === 'wire') {
+        const mb = typeof mol.get_molblock === 'function' ? mol.get_molblock() : '';
+        const parsed = mb ? parseMolblock2D(mb) : null;
+        if (parsed && parsed.atoms.length) {
+          return buildStyledSvgFromCoords(
+            parsed.atoms,
+            parsed.bonds,
+            style,
+            w,
+            h,
+            transparent,
+          );
+        }
+        // Fall through to RDKit SVG if molblock parse fails
+      }
+
+      // 2D ACS (default) — publication skeleton
+      const cpkPalette = {
+        '-1': hexToRgb01(color),
+        0: hexToRgb01(color),
+        1: hexToRgb01('#909090'),
+        6: hexToRgb01(color),
+        7: hexToRgb01('#3050f8'),
+        8: hexToRgb01('#ff0d0d'),
+        9: hexToRgb01('#90e050'),
+        15: hexToRgb01('#ff8000'),
+        16: hexToRgb01('#d4c200'),
+        17: hexToRgb01('#1ff01f'),
+        35: hexToRgb01('#a62929'),
+      };
 
       const details: Record<string, unknown> = {
         width: w,
         height: h,
-        bondLineWidth: acs ? 1.8 : 2.2,
+        bondLineWidth: 1.8,
         addStereoAnnotation: true,
         clearBackground: true,
-        // Fully transparent plate (alpha 0) — thumbs sit on CSS white cards
         backgroundColour: transparent ? [1, 1, 1, 0] : [1, 1, 1, 1],
-        padding: acs ? 0.12 : 0.08,
-        // Uniform bond length in pixels (ACS-like equalized skeleton)
-        fixedBondLength: acs ? 28 : -1,
-        multipleBondOffset: acs ? 0.18 : 0.15,
+        padding: 0.12,
+        fixedBondLength: 28,
+        multipleBondOffset: 0.18,
         additionalAtomLabelPadding: 0.0,
         explicitMethyl: false,
+        // ACS monochrome carbon/hydrogen; hetero keep CPK-ish
         atomColourPalette: {
-          '-1': hexToRgb01(color),
-          0: hexToRgb01(color),
-          1: hexToRgb01(color),
-          6: hexToRgb01(color),
-          7: hexToRgb01('#1e5bb8'),
-          8: hexToRgb01('#c62828'),
-          9: hexToRgb01('#2e7d32'),
-          15: hexToRgb01('#7b1fa2'),
-          16: hexToRgb01('#f9a825'),
-          17: hexToRgb01('#2e7d32'),
-          35: hexToRgb01('#8d6e63'),
+          ...cpkPalette,
+          6: hexToRgb01('#000000'),
+          1: hexToRgb01('#000000'),
+          0: hexToRgb01('#000000'),
+          '-1': hexToRgb01('#000000'),
         },
       };
 

@@ -1,4 +1,5 @@
 import {
+  ActiveSelection,
   Canvas,
   Circle,
   Ellipse,
@@ -8,11 +9,13 @@ import {
   IText,
   Line,
   Path,
+  Point,
   Polygon,
   Polyline,
   Rect,
   Triangle,
   loadSVGFromString,
+  util,
   type TMat2D,
 } from 'fabric';
 import type { LayerInfo, LineKind, SelectionProps, ShapeKind } from '../types';
@@ -385,9 +388,13 @@ export function renameLayer(id: string, name: string) {
 
 export function bringForward() {
   if (!canvas) return;
-  const obj = canvas.getActiveObject();
-  if (!obj || isActiveSelection(obj)) return;
-  canvas.bringObjectForward(obj);
+  const objs = canvas.getActiveObjects();
+  if (!objs.length) return;
+  // Front-most first so relative order is preserved
+  const ordered = [...objs].sort(
+    (a, b) => canvas!.getObjects().indexOf(b) - canvas!.getObjects().indexOf(a),
+  );
+  ordered.forEach((obj) => canvas!.bringObjectForward(obj));
   canvas.requestRenderAll();
   listeners.onLayers?.();
   pushHistory();
@@ -395,9 +402,12 @@ export function bringForward() {
 
 export function sendBackward() {
   if (!canvas) return;
-  const obj = canvas.getActiveObject();
-  if (!obj || isActiveSelection(obj)) return;
-  canvas.sendObjectBackwards(obj);
+  const objs = canvas.getActiveObjects();
+  if (!objs.length) return;
+  const ordered = [...objs].sort(
+    (a, b) => canvas!.getObjects().indexOf(a) - canvas!.getObjects().indexOf(b),
+  );
+  ordered.forEach((obj) => canvas!.sendObjectBackwards(obj));
   canvas.requestRenderAll();
   listeners.onLayers?.();
   pushHistory();
@@ -443,9 +453,12 @@ export function reorderLayer(
 
 export function bringToFront() {
   if (!canvas) return;
-  const obj = canvas.getActiveObject();
-  if (!obj || isActiveSelection(obj)) return;
-  canvas.bringObjectToFront(obj);
+  const objs = canvas.getActiveObjects();
+  if (!objs.length) return;
+  const ordered = [...objs].sort(
+    (a, b) => canvas!.getObjects().indexOf(a) - canvas!.getObjects().indexOf(b),
+  );
+  ordered.forEach((obj) => canvas!.bringObjectToFront(obj));
   canvas.requestRenderAll();
   listeners.onLayers?.();
   pushHistory();
@@ -453,12 +466,272 @@ export function bringToFront() {
 
 export function sendToBack() {
   if (!canvas) return;
-  const obj = canvas.getActiveObject();
-  if (!obj || isActiveSelection(obj)) return;
-  canvas.sendObjectToBack(obj);
+  const objs = canvas.getActiveObjects();
+  if (!objs.length) return;
+  const ordered = [...objs].sort(
+    (a, b) => canvas!.getObjects().indexOf(b) - canvas!.getObjects().indexOf(a),
+  );
+  ordered.forEach((obj) => canvas!.sendObjectToBack(obj));
   canvas.requestRenderAll();
   listeners.onLayers?.();
   pushHistory();
+}
+
+/** In-memory cut/copy buffer for canvas objects (JSON). */
+let objectClipboard: { objects: Record<string, unknown>[] } | null = null;
+
+const BA_PROPS = ['baId', 'baName', 'baLocked'] as const;
+
+export function hasObjectClipboard(): boolean {
+  return !!(objectClipboard && objectClipboard.objects.length);
+}
+
+/** Serialize active selection into the internal object clipboard (+ optional system SVG). */
+export async function copySelectionToClipboard(): Promise<boolean> {
+  if (!canvas) return false;
+  const active = canvas.getActiveObject();
+  if (!active) return false;
+
+  const members = isActiveSelection(active)
+    ? canvas.getActiveObjects()
+    : [active];
+
+  objectClipboard = {
+    objects: members.map((o) => o.toObject([...BA_PROPS]) as Record<string, unknown>),
+  };
+
+  // Also put SVG on system clipboard when possible (for external paste / figure paste)
+  try {
+    const svg = exportSelectionSvg();
+    if (svg && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(svg);
+    }
+  } catch {
+    /* permission / non-secure context */
+  }
+  return true;
+}
+
+export async function cutSelectionToClipboard(): Promise<boolean> {
+  const ok = await copySelectionToClipboard();
+  if (!ok) return false;
+  deleteSelection();
+  return true;
+}
+
+/** Paste objects from the internal cut/copy buffer (offset slightly). */
+export async function pasteObjectClipboard(offset = 24): Promise<boolean> {
+  if (!canvas || !objectClipboard?.objects.length) return false;
+
+  try {
+    const enlivened = await util.enlivenObjects(objectClipboard.objects);
+    const objs = (Array.isArray(enlivened) ? enlivened : [enlivened]).filter(
+      Boolean,
+    ) as FabricObject[];
+    if (!objs.length) return false;
+
+    withHistory(() => {
+      const added: FabricObject[] = [];
+      for (const obj of objs) {
+        reassignIds(obj);
+        const base = asBa(obj).baName || guessName(obj);
+        asBa(obj).baName = base.endsWith(' copy') ? base : `${base} copy`;
+        obj.set({
+          left: (obj.left ?? 0) + offset,
+          top: (obj.top ?? 0) + offset,
+          evented: true,
+          selectable: true,
+        });
+        ensureMeta(obj, asBa(obj).baName);
+        canvas!.add(obj);
+        added.push(obj);
+      }
+      if (added.length === 1) {
+        canvas!.setActiveObject(added[0]);
+      } else if (added.length > 1) {
+        canvas!.discardActiveObject();
+        const sel = new ActiveSelection(added, { canvas: canvas! });
+        canvas!.setActiveObject(sel);
+      }
+      canvas!.requestRenderAll();
+    });
+    return true;
+  } catch (e) {
+    console.error('pasteObjectClipboard', e);
+    return false;
+  }
+}
+
+/**
+ * Right-click helper: select the object under the pointer if it isn't already
+ * part of the current selection. Returns whether something is selected after.
+ *
+ * IMPORTANT: Do NOT call fabric findTarget() with a raw MouseEvent — Fabric 7
+ * expects an internal event shape (e.onSelect) and will throw, killing the menu.
+ */
+export function selectTargetAtEvent(e: MouseEvent | PointerEvent): boolean {
+  if (!canvas) return false;
+  try {
+    const el = canvas.getElement();
+    // Prefer upper canvas for correct hit-testing coords
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const upper = (canvas as any).upperCanvasEl as HTMLCanvasElement | undefined;
+    const surface = upper || el;
+    const rect = surface.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) {
+      return canvas.getActiveObjects().length > 0;
+    }
+    // Map client → fabric scene coords (accounts for CSS scale + viewport transform)
+    const scaleX = (canvas.getWidth() || rect.width) / rect.width;
+    const scaleY = (canvas.getHeight() || rect.height) / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vpt = canvas.viewportTransform as number[] | undefined;
+    let sceneX = x;
+    let sceneY = y;
+    if (vpt && vpt.length >= 6) {
+      const inv = util.invertTransform(vpt as TMat2D);
+      const p = util.transformPoint(new Point(x, y), inv);
+      sceneX = p.x;
+      sceneY = p.y;
+    }
+
+    const objects = canvas.getObjects();
+    const hitPt = new Point(sceneX, sceneY);
+    // Top-most first
+    let target: FabricObject | undefined;
+    for (let i = objects.length - 1; i >= 0; i--) {
+      const obj = objects[i];
+      if (!obj.visible || obj.evented === false) continue;
+      try {
+        if (obj.containsPoint(hitPt)) {
+          target = obj;
+          break;
+        }
+      } catch {
+        // Fallback: bounding box hit test
+        const b = obj.getBoundingRect();
+        if (
+          sceneX >= b.left &&
+          sceneX <= b.left + b.width &&
+          sceneY >= b.top &&
+          sceneY <= b.top + b.height
+        ) {
+          target = obj;
+          break;
+        }
+      }
+    }
+
+    if (target && !isActiveSelection(target)) {
+      const active = canvas.getActiveObjects();
+      if (!active.includes(target)) {
+        canvas.setActiveObject(target);
+        canvas.requestRenderAll();
+        listeners.onSelection?.();
+      }
+      return true;
+    }
+  } catch (err) {
+    console.warn('selectTargetAtEvent', err);
+  }
+  return canvas.getActiveObjects().length > 0;
+}
+
+/** Attach native contextmenu listener on Fabric upper canvas (most reliable). */
+export function bindCanvasContextMenu(
+  handler: (e: MouseEvent) => void,
+): () => void {
+  if (!canvas) return () => {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const upper = (canvas as any).upperCanvasEl as HTMLCanvasElement | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lower = (canvas as any).lowerCanvasEl as HTMLCanvasElement | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const container = (canvas as any).wrapperEl as HTMLElement | undefined;
+  const targets = [upper, lower, container].filter(Boolean) as HTMLElement[];
+  const onCtx = (e: Event) => {
+    const me = e as MouseEvent;
+    me.preventDefault();
+    me.stopPropagation();
+    handler(me);
+  };
+  for (const t of targets) {
+    t.addEventListener('contextmenu', onCtx);
+  }
+  return () => {
+    for (const t of targets) {
+      t.removeEventListener('contextmenu', onCtx);
+    }
+  };
+}
+
+/** SVG markup for the current selection only (not whole artboard). */
+export function exportSelectionSvg(): string | null {
+  if (!canvas) return null;
+  const active = canvas.getActiveObject();
+  if (!active) return null;
+  try {
+    const raw = active.toSVG();
+    if (!raw || !raw.includes('<')) return null;
+    // Wrap fragment in a root svg if needed
+    if (/^\s*<svg\b/i.test(raw)) return raw;
+    const bound = active.getBoundingRect();
+    const w = Math.max(1, Math.ceil(bound.width || 100));
+    const h = Math.max(1, Math.ceil(bound.height || 100));
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">${raw}</svg>`;
+  } catch {
+    return null;
+  }
+}
+
+/** Download current selection as an .svg file. */
+export function downloadSelectionSvg(filename = 'selection.svg'): boolean {
+  const svg = exportSelectionSvg();
+  if (!svg) return false;
+  const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename.replace(/[^\w.\-]+/g, '_') || 'selection.svg';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  return true;
+}
+
+/** Build a library icon from the current selection (for favorites). */
+export function selectionAsLibraryIcon(): {
+  id: string;
+  name: string;
+  category: 'symbols';
+  path: string;
+  svgContent: string;
+  source: 'user';
+} | null {
+  if (!canvas) return null;
+  const active = canvas.getActiveObject();
+  if (!active) return null;
+  const svg = exportSelectionSvg();
+  if (!svg) return null;
+  const name = asBa(active).baName || guessName(active);
+  return {
+    id: `fav/${asBa(active).baId || uid()}-${Date.now()}`,
+    name,
+    category: 'symbols',
+    path: '',
+    svgContent: svg,
+    source: 'user',
+  };
+}
+
+export function getSelectionCount(): number {
+  return canvas?.getActiveObjects().length ?? 0;
+}
+
+export function selectionIsGroup(): boolean {
+  if (!canvas) return false;
+  const active = canvas.getActiveObject();
+  return !!(active && isGroup(active));
 }
 
 export function deleteSelection() {

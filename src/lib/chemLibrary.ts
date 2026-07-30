@@ -22,13 +22,124 @@ export type ChemStructure = {
 
 const STORAGE_KEY = 'bioartist-chem-library-v1';
 const CHANNEL = 'bioartist-chem';
+/** Cross-tab clipboard for Chem Studio → figure (more reliable than system clipboard alone). */
+export const CHEM_CLIPBOARD_KEY = 'bioartist-chem-clipboard-v1';
 const MAX_RECENT = 24;
 const MAX_SAVED = 80;
+
+export type ChemClipboardPayload = {
+  svg: string;
+  smiles: string;
+  molfile?: string;
+  name: string;
+  ts: number;
+};
+
+/** Store a structure for paste on the figure canvas (localStorage + optional system clipboard). */
+export async function writeChemClipboard(payload: {
+  svg: string;
+  smiles: string;
+  molfile?: string;
+  name?: string;
+}): Promise<{ systemOk: boolean }> {
+  const clean = stripOpaqueBackgroundRects(payload.svg);
+  const data: ChemClipboardPayload = {
+    svg: clean,
+    smiles: payload.smiles.trim(),
+    molfile: payload.molfile,
+    name: payload.name?.trim() || payload.smiles.trim().slice(0, 40) || 'Molecule',
+    ts: Date.now(),
+  };
+  chemClipboardMemory = data;
+  try {
+    localStorage.setItem(CHEM_CLIPBOARD_KEY, JSON.stringify(data));
+    sessionStorage.setItem(CHEM_CLIPBOARD_KEY, JSON.stringify(data));
+  } catch {
+    /* quota */
+  }
+  // Notify figure tab that something was copied
+  try {
+    const ch = new BroadcastChannel(CHANNEL);
+    ch.postMessage({ type: 'chem-clipboard', payload: data } as ChemLibraryMsg);
+    ch.close();
+  } catch {
+    /* ignore */
+  }
+
+  let systemOk = false;
+  // Prefer SMILES as text/plain (small, figure paste understands it) and also put SVG
+  try {
+    if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+      const parts: Record<string, Blob> = {
+        'text/plain': new Blob([data.smiles || clean], { type: 'text/plain' }),
+      };
+      // Some browsers reject image/svg+xml in ClipboardItem — try, fall back
+      try {
+        parts['image/svg+xml'] = new Blob([clean], { type: 'image/svg+xml' });
+        await navigator.clipboard.write([new ClipboardItem(parts)]);
+        systemOk = true;
+      } catch {
+        await navigator.clipboard.writeText(data.smiles || clean);
+        systemOk = true;
+      }
+    } else if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(data.smiles || clean);
+      systemOk = true;
+    }
+  } catch {
+    systemOk = false;
+  }
+  return { systemOk };
+}
+
+/** In-memory cache (same tab + BroadcastChannel from Chem Studio). */
+let chemClipboardMemory: ChemClipboardPayload | null = null;
+
+export function seedChemClipboardMemory(payload: ChemClipboardPayload) {
+  chemClipboardMemory = payload;
+}
+
+export function readChemClipboard(): ChemClipboardPayload | null {
+  // Prefer freshest: memory vs localStorage
+  try {
+    const raw = localStorage.getItem(CHEM_CLIPBOARD_KEY);
+    if (raw) {
+      const data = JSON.parse(raw) as ChemClipboardPayload;
+      if (data?.svg || data?.smiles) {
+        if (!data.ts || Date.now() - data.ts <= 2 * 60 * 60 * 1000) {
+          if (!chemClipboardMemory || (data.ts || 0) >= (chemClipboardMemory.ts || 0)) {
+            chemClipboardMemory = data;
+          }
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  if (!chemClipboardMemory) return null;
+  if (
+    chemClipboardMemory.ts &&
+    Date.now() - chemClipboardMemory.ts > 2 * 60 * 60 * 1000
+  ) {
+    return null;
+  }
+  if (!chemClipboardMemory.svg && !chemClipboardMemory.smiles) return null;
+  return chemClipboardMemory;
+}
+
+export function clearChemClipboard() {
+  try {
+    localStorage.removeItem(CHEM_CLIPBOARD_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
 export type ChemLibraryMsg =
   | { type: 'library-updated' }
   | { type: 'structure-saved'; id: string }
-  | { type: 'send-to-figure'; structure: ChemStructure };
+  | { type: 'send-to-figure'; structure: ChemStructure }
+  | { type: 'chem-clipboard'; payload: ChemClipboardPayload };
 
 function loadAll(): ChemStructure[] {
   try {
@@ -121,29 +232,19 @@ export function pushRecentFromSmiles(
   });
 }
 
-/** Draw SVG for a style (2D ACS via RDKit; other styles approximated for now). */
+/** Draw SVG for a Chem Studio display style (ACS · ball-stick · CPK · wire). */
 export async function renderChemStyle(
   smiles: string,
   style: ChemStyle,
   size = { width: 280, height: 220 },
 ): Promise<string | null> {
-  // 2D ACS black bonds; ball/stick & CPK use thicker / more colorful atoms
-  if (style === '2d' || style === 'wire') {
-    return smilesToSvg(smiles, {
-      width: size.width,
-      height: size.height,
-      acs: style === '2d',
-      transparent: true,
-      color: '#000000',
-    });
-  }
-  // ballstick / cpk — still 2D RDKit with hetero color emphasis (3D later)
   return smilesToSvg(smiles, {
     width: size.width,
     height: size.height,
-    acs: true,
+    style,
+    acs: true, // always ACS-regular 2D layout, then style the drawing
     transparent: true,
-    color: style === 'cpk' ? '#222222' : '#111111',
+    color: '#000000',
   });
 }
 

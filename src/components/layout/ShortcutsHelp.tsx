@@ -19,7 +19,8 @@ const ROWS: [string, string][] = [
   ['⌘/Ctrl + E', 'Export'],
   ['Space + drag', 'Pan canvas'],
   ['⌘/Ctrl + scroll', 'Zoom'],
-  ['⌘/Ctrl + V', 'Paste SVG or image from clipboard'],
+  ['⌘/Ctrl + C / X / V', 'Copy / cut / paste objects (or SVG · SMILES · image)'],
+  ['Right-click canvas', 'Context menu — paste, layers, favorites, SVG…'],
   ['?', 'This help'],
 ];
 
