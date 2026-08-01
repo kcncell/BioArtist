@@ -61,7 +61,12 @@ const TOOLS: { id: ToolId; label: string; tip: string; icon: React.ReactNode }[]
     ),
   },
   { id: 'shapes', label: 'Shapes', tip: 'Shapes', icon: <Shapes size={18} /> },
-  { id: 'lines', label: 'Lines', tip: 'Lines', icon: <LinesRailIcon /> },
+  {
+    id: 'lines',
+    label: 'Lines',
+    tip: 'Lines & arrows',
+    icon: <LinesRailIcon />,
+  },
   { id: 'text', label: 'Text', tip: 'Text', icon: <Type size={18} /> },
 ];
 

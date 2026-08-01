@@ -1,4 +1,5 @@
 import {
+  ArrowRight,
   FlaskConical,
   Hexagon,
   Library,
@@ -9,15 +10,13 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { LibraryIcon } from '../../data/catalog';
-import { addSvgToCanvas } from '../../lib/canvasController';
+import { addReactionArrowWithReagents, addSvgToCanvas } from '../../lib/canvasController';
 import {
   type ChemStructure,
-  consumePendingPlace,
   loadChemLibrary,
   openChemStudio,
   pushRecentFromSmiles,
   subscribeChemLibrary,
-  subscribeSendToFigure,
   upsertChemStructure,
 } from '../../lib/chemLibrary';
 import { setIconDragData } from '../../lib/iconDrag';
@@ -101,24 +100,8 @@ export function ChemPanel() {
     return subscribeChemLibrary(refreshLibrary);
   }, [refreshLibrary]);
 
-  // Place structures sent from Chem Studio (other tab)
-  useEffect(() => {
-    const place = async (s: ChemStructure) => {
-      try {
-        const clean = stripOpaqueBackgroundRects(s.svg);
-        await addSvgToCanvas(clean, { name: s.name, maxSize: 200 });
-        showToast(`Placed “${s.name}” from Chem Studio`);
-        refreshLibrary();
-      } catch (e) {
-        console.error(e);
-        showToast('Could not place structure from studio');
-      }
-    };
-    const unsub = subscribeSendToFigure((s) => void place(s));
-    const pending = consumePendingPlace();
-    if (pending) void place(pending);
-    return unsub;
-  }, [showToast, refreshLibrary]);
+  // Chem Studio → figure placement is handled globally in App.tsx so it works
+  // even when this panel is not mounted.
 
   const cards: Card[] = useMemo(() => {
     if (tab === 'amino') return aminoCards;
@@ -281,6 +264,18 @@ export function ChemPanel() {
           title="Full structure editor (Ketcher) — opens only when you ask"
         >
           <FlaskConical size={14} /> Open Chem Studio
+        </button>
+        <button
+          type="button"
+          className="ba-btn"
+          style={{ width: '100%' }}
+          title="Straight reaction arrow with top & bottom reagent labels on the figure canvas"
+          onClick={() => {
+            addReactionArrowWithReagents();
+            showToast('Reaction arrow + reagent boxes placed on the canvas');
+          }}
+        >
+          <ArrowRight size={14} /> Reaction arrow + reagents
         </button>
         <button className="ba-btn" style={{ width: '100%' }} onClick={onImportFile}>
           <Upload size={14} /> Import structure file

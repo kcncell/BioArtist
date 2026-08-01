@@ -27,7 +27,13 @@ import {
 } from './alignGuides';
 
 // Persist BioArtist metadata across save/load and history
-FabricObject.customProperties = ['baId', 'baName', 'baLocked'];
+FabricObject.customProperties = [
+  'baId',
+  'baName',
+  'baLocked',
+  'baReactionId',
+  'baReagentSlot',
+];
 
 let ARTBOARD_W = 900;
 let ARTBOARD_H = 600;
@@ -480,7 +486,7 @@ export function sendToBack() {
 /** In-memory cut/copy buffer for canvas objects (JSON). */
 let objectClipboard: { objects: Record<string, unknown>[] } | null = null;
 
-const BA_PROPS = ['baId', 'baName', 'baLocked'] as const;
+const BA_PROPS = ['baId', 'baName', 'baLocked', 'baReactionId', 'baReagentSlot'] as const;
 
 export function hasObjectClipboard(): boolean {
   return !!(objectClipboard && objectClipboard.objects.length);
@@ -1602,6 +1608,170 @@ export function addLine(kind: LineKind) {
   }
 
   placeShape(obj, name);
+}
+
+// ─── Reaction arrow + reagent labels ─────────────────────────────────────────
+
+/** Vertical gap from arrow centerline to each label center (px) — equidistant top/bottom. */
+const REAGENT_LABEL_GAP = 34;
+const REACTION_ARROW_LEN = 180;
+
+function makeStraightArrowGroup(cx: number, cy: number, len = REACTION_ARROW_LEN): Group {
+  const stroke = LINE_STROKE;
+  const shaft = new Line([0, 0, len, 0], {
+    stroke,
+    strokeWidth: 3.5,
+    strokeLineCap: 'butt',
+  });
+  const head = new Triangle({
+    width: 18,
+    height: 20,
+    fill: stroke,
+    left: len,
+    top: 0,
+    originX: 'center',
+    originY: 'center',
+    angle: 90,
+  });
+  return new Group([shaft, head], {
+    left: cx,
+    top: cy,
+    originX: 'center',
+    originY: 'center',
+  });
+}
+
+function makeReagentLabel(
+  text: string,
+  left: number,
+  top: number,
+  name: string,
+): IText {
+  const t = new IText(text, {
+    left,
+    top,
+    originX: 'center',
+    originY: 'center',
+    fontFamily: 'Inter, system-ui, sans-serif',
+    fontSize: 15,
+    fontStyle: 'italic',
+    fill: DEEP_BLACK,
+    textAlign: 'center',
+    editable: true,
+  });
+  ensureMeta(t, name);
+  return t;
+}
+
+function tagReaction(obj: FabricObject, reactionId: string, slot: 'arrow' | 'top' | 'bottom') {
+  const o = asBa(obj);
+  o.baReactionId = reactionId;
+  o.baReagentSlot = slot;
+}
+
+/**
+ * Place a straight reaction arrow with top + bottom reagent text boxes,
+ * centered on the arrow and equidistant above/below.
+ * Boxes are independent objects (move / delete separately). Double-click to edit.
+ */
+export function addReactionArrowWithReagents(opts?: {
+  left?: number;
+  top?: number;
+  topText?: string;
+  bottomText?: string;
+}): void {
+  if (!canvas) return;
+  const cx = opts?.left ?? ARTBOARD_W / 2;
+  const cy = opts?.top ?? ARTBOARD_H / 2;
+  const reactionId = uid();
+
+  withHistory(() => {
+    const arrow = makeStraightArrowGroup(cx, cy);
+    ensureMeta(arrow, 'Reaction arrow');
+    tagReaction(arrow, reactionId, 'arrow');
+
+    const top = makeReagentLabel(
+      opts?.topText ?? 'reagent',
+      cx,
+      cy - REAGENT_LABEL_GAP,
+      'Reagent (top)',
+    );
+    tagReaction(top, reactionId, 'top');
+
+    const bottom = makeReagentLabel(
+      opts?.bottomText ?? 'condition',
+      cx,
+      cy + REAGENT_LABEL_GAP,
+      'Condition (bottom)',
+    );
+    tagReaction(bottom, reactionId, 'bottom');
+
+    canvas!.add(arrow);
+    canvas!.add(top);
+    canvas!.add(bottom);
+
+    // Select all three so user can move the assembly as a unit first
+    try {
+      const sel = new ActiveSelection([arrow, top, bottom], { canvas: canvas! });
+      canvas!.setActiveObject(sel);
+    } catch {
+      canvas!.setActiveObject(arrow);
+    }
+    // Ensure artboard is in view (avoid “where did it go?” when pan/zoom was changed)
+    try {
+      canvas!.setViewportTransform([1, 0, 0, 1, 0, 0] as TMat2D);
+      canvas!.setZoom(1);
+      listeners.onZoom?.(1);
+    } catch {
+      /* ignore */
+    }
+    canvas!.requestRenderAll();
+  });
+}
+
+/**
+ * Add top/bottom reagent labels to an already-selected arrow (or any object).
+ * Labels are centered on the selection and equidistant above/below.
+ */
+export function addReagentsToSelectedArrow(opts?: {
+  topText?: string;
+  bottomText?: string;
+}): boolean {
+  if (!canvas) return false;
+  const active = canvas.getActiveObject();
+  if (!active || isActiveSelection(active)) return false;
+
+  const center = active.getCenterPoint();
+  const reactionId = asBa(active).baReactionId || uid();
+
+  withHistory(() => {
+    tagReaction(active, reactionId, asBa(active).baReagentSlot || 'arrow');
+    if (!asBa(active).baName || asBa(active).baName === 'Arrow') {
+      asBa(active).baName = 'Reaction arrow';
+    }
+
+    const top = makeReagentLabel(
+      opts?.topText ?? 'reagent',
+      center.x,
+      center.y - REAGENT_LABEL_GAP,
+      'Reagent (top)',
+    );
+    tagReaction(top, reactionId, 'top');
+
+    const bottom = makeReagentLabel(
+      opts?.bottomText ?? 'condition',
+      center.x,
+      center.y + REAGENT_LABEL_GAP,
+      'Condition (bottom)',
+    );
+    tagReaction(bottom, reactionId, 'bottom');
+
+    canvas!.add(top);
+    canvas!.add(bottom);
+    canvas!.setActiveObject(top);
+    canvas!.requestRenderAll();
+  });
+  return true;
 }
 
 export function setZoom(zoom: number) {

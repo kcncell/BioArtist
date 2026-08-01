@@ -4,22 +4,25 @@
  */
 import {
   ArrowLeft,
+  ArrowRight,
   ClipboardCopy,
   Download,
   FlaskConical,
   Loader2,
+  MoreVertical,
   Save,
   Send,
   Star,
-  Trash2,
 } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   type ChemStructure,
   type ChemStyle,
+  duplicateChemStructure,
   loadChemBySource,
   notifySendToFigure,
   removeChemStructure,
+  renameChemStructure,
   renderChemStyle,
   subscribeChemLibrary,
   upsertChemStructure,
@@ -29,10 +32,18 @@ import { applyGlassTheme } from '../../lib/glassTheme';
 import { chemSvgToDataUrl, getRDKit, smilesToSvg, stripOpaqueBackgroundRects } from '../../lib/rdkit';
 import { loadGlassHue, loadGlassOpacity, loadThemeMode } from '../../lib/storage';
 import {
+  ChemFavoriteContextMenu,
+  type ChemFavMenuState,
+} from './ChemFavoriteContextMenu';
+import {
   ChemStudioContextMenu,
   type ChemCtxMenuState,
 } from './ChemStudioContextMenu';
-import type { KetcherApi } from './KetcherHost';
+import {
+  CHEM_FAV_DRAG_MIME,
+  type ChemFavDragPayload,
+  type KetcherApi,
+} from './KetcherHost';
 
 const KetcherEditor = lazy(() =>
   import('./KetcherHost')
@@ -84,10 +95,13 @@ export function ChemStudio() {
   const [status, setStatus] = useState('Ready');
   const [ketcherOk, setKetcherOk] = useState(true);
   const [ctxMenu, setCtxMenu] = useState<ChemCtxMenuState | null>(null);
+  const [favMenu, setFavMenu] = useState<ChemFavMenuState | null>(null);
   /** Zoom for ball-and-stick canvas. 1 = fit. */
   const [viewZoom, setViewZoom] = useState(1);
   const [favorites, setFavorites] = useState<ChemStructure[]>([]);
   const ketcherRef = useRef<KetcherApi | null>(null);
+  /** Skip the synthetic click that browsers fire after a drag. */
+  const favDraggedRef = useRef(false);
 
   useEffect(() => {
     applyGlassTheme(loadGlassOpacity(), loadGlassHue(), loadThemeMode());
@@ -138,8 +152,11 @@ export function ChemStudio() {
             : await renderChemStyle(s, next, { width: 720, height: 560 });
         setStyle(next);
         setCanvasSvg(large);
+        if (next === '2d') {
+          ketcherRef.current?.setSelectStructure();
+        }
         const labels: Record<string, string> = {
-          '2d': '2D ACS — sketcher is live for drawing. Exports use ACS bonds.',
+          '2d': '2D ACS — hover/click structure to select · ⌘/Ctrl+drag for marquee · toolbar for bonds',
           ballstick:
             'CPK ball & stick — gray C, red O, blue N… (click again or 2D ACS to edit)',
         };
@@ -274,27 +291,246 @@ export function ChemStudio() {
     }
   }, [buildSvg, name, readStructure, refreshFavorites, style]);
 
-  const loadFavorite = useCallback(
-    async (fav: ChemStructure) => {
-      setName(fav.name);
-      setSmiles(fav.smiles);
-      try {
-        if (ketcherRef.current && fav.smiles) {
-          await ketcherRef.current.setMolecule(fav.smiles);
-        }
-      } catch {
-        /* smiles field still set */
+  /**
+   * Add a favorite onto the sketcher without clearing existing drawing.
+   * Optional drop position (model coords) from drag-and-drop.
+   * Prefer SMILES (molfile failures are often silent in Ketcher).
+   */
+  const addFavoriteToCanvas = useCallback(
+    async (fav: ChemStructure, position?: { x: number; y: number }) => {
+      if (!(fav.smiles || fav.molfile)?.trim()) {
+        setStatus('Favorite has no structure to add');
+        return;
       }
-      if (fav.style === 'ballstick') {
+      // Ensure we're in edit mode so the user sees the addition
+      if (style !== '2d') {
         setViewZoom(1);
-        void applyStyle('ballstick');
-      } else {
         setStyle('2d');
         setCanvasSvg(null);
       }
-      setStatus(`Loaded favorite “${fav.name}”`);
+      const api = ketcherRef.current;
+      if (!api) {
+        setSmiles((prev) => (prev.trim() ? prev : fav.smiles));
+        setName(fav.name);
+        setStatus(`Set SMILES to “${fav.name}” (sketcher not ready — try again in a moment)`);
+        return;
+      }
+      setBusy(true);
+      try {
+        const result = await api.addFragment({
+          smiles: fav.smiles,
+          molfile: fav.molfile,
+          position,
+        });
+        if (result.ok) {
+          if (result.smiles) setSmiles(result.smiles);
+          setStatus(
+            position
+              ? `Dropped “${fav.name}” on canvas`
+              : `Added “${fav.name}” to canvas (existing drawing kept)`,
+          );
+        } else {
+          setStatus(
+            `Could not add “${fav.name}” — ${result.error || 'try Sync SMILES or re-save the favorite'}`,
+          );
+        }
+      } catch (err) {
+        console.error(err);
+        setStatus(`Could not add “${fav.name}” to canvas`);
+      } finally {
+        setBusy(false);
+      }
     },
-    [applyStyle],
+    [style],
+  );
+
+  /** Context menu alias — same as click-to-add */
+  const loadFavorite = addFavoriteToCanvas;
+
+  const onFavoriteDragStart = useCallback(
+    (e: React.DragEvent, fav: ChemStructure) => {
+      favDraggedRef.current = true;
+      const payload: ChemFavDragPayload = {
+        smiles: fav.smiles,
+        molfile: fav.molfile,
+        name: fav.name,
+      };
+      e.dataTransfer.setData(CHEM_FAV_DRAG_MIME, JSON.stringify(payload));
+      e.dataTransfer.setData('text/plain', fav.smiles || fav.name);
+      e.dataTransfer.effectAllowed = 'copy';
+      // Prefer thumbnail as drag image when available
+      const img = (e.currentTarget as HTMLElement).querySelector('img');
+      if (img) {
+        try {
+          e.dataTransfer.setDragImage(img, img.width / 2, img.height / 2);
+        } catch {
+          /* ignore */
+        }
+      }
+      setStatus(`Drag “${fav.name}” onto the canvas to place it`);
+    },
+    [],
+  );
+
+  const onFavoriteClick = useCallback(
+    (fav: ChemStructure) => {
+      // Ignore the click that browsers fire after a completed drag
+      if (favDraggedRef.current) {
+        favDraggedRef.current = false;
+        return;
+      }
+      void addFavoriteToCanvas(fav);
+    },
+    [addFavoriteToCanvas],
+  );
+
+  const openFavMenuAt = useCallback((x: number, y: number, fav: ChemStructure) => {
+    setCtxMenu(null);
+    setFavMenu({ x, y, fav });
+  }, []);
+
+  const copyFavoriteForFigure = useCallback(async (fav: ChemStructure) => {
+    setBusy(true);
+    try {
+      const svg =
+        fav.svg ||
+        (await renderChemStyle(fav.smiles, fav.style === 'ballstick' ? 'ballstick' : '2d')) ||
+        (await smilesToSvg(fav.smiles, {
+          width: 280,
+          height: 220,
+          acs: true,
+          transparent: true,
+        }));
+      if (!svg) {
+        setStatus('Could not copy favorite for figure');
+        return;
+      }
+      const { systemOk } = await writeChemClipboard({
+        svg: stripOpaqueBackgroundRects(svg),
+        smiles: fav.smiles,
+        molfile: fav.molfile,
+        name: fav.name,
+      });
+      setStatus(
+        systemOk
+          ? `Copied “${fav.name}” — switch to BioArtist and Paste (⌘V)`
+          : `Copied “${fav.name}” via Chem bridge — Paste on BioArtist canvas`,
+      );
+    } catch (err) {
+      console.error(err);
+      setStatus('Copy favorite failed');
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const sendFavoriteToBioArtist = useCallback(async (fav: ChemStructure) => {
+    setBusy(true);
+    try {
+      let svg =
+        fav.svg ||
+        (await renderChemStyle(fav.smiles, fav.style === 'ballstick' ? 'ballstick' : '2d')) ||
+        null;
+      if (!svg && fav.smiles) {
+        svg = await smilesToSvg(fav.smiles, {
+          width: 280,
+          height: 220,
+          acs: true,
+          transparent: true,
+        });
+      }
+      if (!svg) {
+        setStatus('Favorite has no drawable structure — re-save it from the sketcher');
+        return;
+      }
+      const clean = stripOpaqueBackgroundRects(svg);
+      await writeChemClipboard({
+        svg: clean,
+        smiles: fav.smiles,
+        molfile: fav.molfile,
+        name: fav.name,
+      });
+      const structure: ChemStructure = { ...fav, svg: clean };
+      notifySendToFigure(structure);
+      setStatus(
+        `Sent “${fav.name}” to BioArtist — open the figure tab (any tool) to place it, or Paste (⌘V)`,
+      );
+    } catch (err) {
+      console.error(err);
+      setStatus('Could not send favorite to BioArtist');
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const renameFavorite = useCallback(
+    (fav: ChemStructure) => {
+      const next = window.prompt('Rename favorite', fav.name);
+      if (next == null) return;
+      const trimmed = next.trim();
+      if (!trimmed || trimmed === fav.name) return;
+      const updated = renameChemStructure(fav.id, trimmed);
+      if (updated) {
+        refreshFavorites();
+        if (name === fav.name) setName(updated.name);
+        setStatus(`Renamed to “${updated.name}”`);
+      } else {
+        setStatus('Could not rename favorite');
+      }
+    },
+    [name, refreshFavorites],
+  );
+
+  const downloadFavoriteSvg = useCallback((fav: ChemStructure) => {
+    const svg = fav.svg;
+    if (!svg) {
+      setStatus('No SVG stored for this favorite');
+      return;
+    }
+    const blob = new Blob([stripOpaqueBackgroundRects(svg)], { type: 'image/svg+xml' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${(fav.name || 'molecule').replace(/[^\w\-]+/g, '_')}.svg`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setStatus(`Downloaded “${fav.name}.svg”`);
+  }, []);
+
+  const copyFavoriteSmiles = useCallback(async (fav: ChemStructure) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(fav.smiles);
+        setStatus(`Copied SMILES for “${fav.name}”`);
+      } else {
+        setStatus(fav.smiles);
+      }
+    } catch {
+      setStatus(fav.smiles || 'No SMILES');
+    }
+  }, []);
+
+  const duplicateFavorite = useCallback(
+    (fav: ChemStructure) => {
+      const copy = duplicateChemStructure(fav.id);
+      if (copy) {
+        refreshFavorites();
+        setStatus(`Duplicated as “${copy.name}”`);
+      } else {
+        setStatus('Could not duplicate favorite');
+      }
+    },
+    [refreshFavorites],
+  );
+
+  const deleteFavorite = useCallback(
+    (fav: ChemStructure) => {
+      const ok = window.confirm(`Delete favorite “${fav.name}”?`);
+      if (!ok) return;
+      removeChemStructure(fav.id);
+      refreshFavorites();
+      setStatus(`Removed “${fav.name}”`);
+    },
+    [refreshFavorites],
   );
 
   const syncFromKetcher = useCallback(async () => {
@@ -476,6 +712,7 @@ export function ChemStudio() {
           /* keep previous */
         }
       }
+      setFavMenu(null);
       setCtxMenu({ x: e.clientX, y: e.clientY, hasStructure });
     },
     [canvasSvg, smiles],
@@ -631,7 +868,7 @@ export function ChemStudio() {
         <section className="ba-chem-studio-editor">
           <div className="ba-chem-studio-section-label">
             {style === '2d'
-              ? '2D ACS editor · draw bonds · right-click → Copy for figure'
+              ? '2D ACS · ⌘/Ctrl+drag marquee (any tool) · hover/click structure · right-click → Copy for figure'
               : `Viewing ${
                   style === 'ballstick'
                     ? 'ball & stick'
@@ -665,6 +902,8 @@ export function ChemStudio() {
                   onClick={() => {
                     setViewZoom(1);
                     void applyStyle('2d');
+                    // When returning to edit mode, restore structure-select as default
+                    queueMicrotask(() => ketcherRef.current?.setSelectStructure());
                   }}
                 >
                   Edit structure (2D ACS)
@@ -754,10 +993,27 @@ export function ChemStudio() {
                 <KetcherEditor
                   initialSmiles={smiles}
                   onContextMenu={(e) => void openCtx(e)}
+                  onFragmentAdded={({ name }) => {
+                    setStatus(
+                      name
+                        ? `Dropped “${name}” onto canvas`
+                        : 'Dropped structure onto canvas',
+                    );
+                    void (async () => {
+                      try {
+                        const s = (await ketcherRef.current?.getSmiles())?.trim();
+                        if (s) setSmiles(s);
+                      } catch {
+                        /* ignore */
+                      }
+                    })();
+                  }}
                   onReady={(api) => {
                     ketcherRef.current = api;
+                    // Default: structure select + hover; marquee = ⌘/Ctrl+drag
+                    api.setSelectStructure();
                     setStatus(
-                      'Ketcher ready — draw, then pick a display style or Copy for figure (⌘C)',
+                      'Ketcher ready — click structure to select · drag to move (snaps) · Hand pans view · favorites add beside · ⌘/Ctrl+drag marquee',
                     );
                   }}
                   onError={() => {
@@ -782,6 +1038,63 @@ export function ChemStudio() {
         </section>
 
         <aside className="ba-chem-studio-side">
+          <div className="ba-chem-studio-section-label">Reaction scheme</div>
+          <div className="ba-chem-reaction-tools">
+            <button
+              type="button"
+              className="ba-btn ba-btn-primary ba-btn-sm"
+              style={{ width: '100%', justifyContent: 'center' }}
+              disabled={busy || !ketcherOk || style !== '2d'}
+              title="Insert a straight reaction arrow with top & bottom reagent labels"
+              onClick={() => {
+                const api = ketcherRef.current;
+                if (!api) {
+                  setStatus('Sketcher not ready yet');
+                  return;
+                }
+                if (style !== '2d') {
+                  setStatus('Switch to 2D ACS to edit reaction schemes');
+                  return;
+                }
+                const r = api.addReactionArrowWithReagents();
+                setStatus(
+                  r.ok
+                    ? 'Reaction arrow + labels added — double-click a label to edit; select & Delete to remove'
+                    : r.error || 'Could not add reaction arrow',
+                );
+              }}
+            >
+              <ArrowRight size={14} /> Reaction arrow + reagents
+            </button>
+            <button
+              type="button"
+              className="ba-btn ba-btn-sm"
+              style={{ width: '100%', justifyContent: 'center' }}
+              disabled={busy || !ketcherOk || style !== '2d'}
+              title="Select a reaction arrow on the canvas first, then add top/bottom labels"
+              onClick={() => {
+                const api = ketcherRef.current;
+                if (!api) {
+                  setStatus('Sketcher not ready yet');
+                  return;
+                }
+                const r = api.addReagentsToSelectedArrow();
+                setStatus(
+                  r.ok
+                    ? 'Reagent labels added above/below the selected arrow'
+                    : r.error || 'Select a reaction arrow first',
+                );
+              }}
+            >
+              <FlaskConical size={14} /> Labels on selected arrow
+            </button>
+            <p className="ba-chem-studio-style-note" style={{ margin: '0' }}>
+              Labels sit centered above &amp; below the arrow. Double-click to edit text; select a
+              label alone and press Delete to remove it. Build reactants/products with the bond
+              tools, then <strong>Copy for figure</strong> / Send to BioArtist.
+            </p>
+          </div>
+
           <div className="ba-chem-studio-section-label">Display style</div>
           <div className="ba-chem-style-grid">
             {STYLES.map((s) => (
@@ -821,6 +1134,9 @@ export function ChemStudio() {
           >
             <Star size={14} /> Add current to favorites
           </button>
+          <p className="ba-chem-studio-style-note" style={{ margin: '0 12px 6px' }}>
+            Click to add · drag onto canvas to place · right-click for more
+          </p>
           <div className="ba-chem-fav-list">
             {favorites.length === 0 && (
               <p className="ba-chem-studio-style-note" style={{ margin: '6px 0' }}>
@@ -828,12 +1144,33 @@ export function ChemStudio() {
               </p>
             )}
             {favorites.map((fav) => (
-              <div key={fav.id} className="ba-chem-fav-item">
+              <div
+                key={fav.id}
+                className="ba-chem-fav-item"
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openFavMenuAt(e.clientX, e.clientY, fav);
+                }}
+              >
                 <button
                   type="button"
                   className="ba-chem-fav-thumb"
-                  title={`${fav.name}\n${fav.smiles}`}
-                  onClick={() => void loadFavorite(fav)}
+                  draggable
+                  title={`${fav.name}\n${fav.smiles}\nClick to add · drag onto canvas · right-click for more`}
+                  onClick={() => onFavoriteClick(fav)}
+                  onDragStart={(e) => onFavoriteDragStart(e, fav)}
+                  onDragEnd={() => {
+                    // Clear drag flag after browsers that don't synthesize a click
+                    window.setTimeout(() => {
+                      favDraggedRef.current = false;
+                    }, 0);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openFavMenuAt(e.clientX, e.clientY, fav);
+                  }}
                 >
                   {fav.svg ? (
                     <img src={chemSvgToDataUrl(fav.svg)} alt={fav.name} draggable={false} />
@@ -845,14 +1182,16 @@ export function ChemStudio() {
                 <button
                   type="button"
                   className="ba-btn ba-btn-sm ba-btn-icon ba-chem-fav-del"
-                  title="Remove favorite"
-                  onClick={() => {
-                    removeChemStructure(fav.id);
-                    refreshFavorites();
-                    setStatus(`Removed “${fav.name}”`);
+                  title="Favorite actions"
+                  aria-label={`Actions for ${fav.name}`}
+                  draggable={false}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    openFavMenuAt(r.right, r.bottom, fav);
                   }}
                 >
-                  <Trash2 size={13} />
+                  <MoreVertical size={13} />
                 </button>
               </div>
             ))}
@@ -874,7 +1213,20 @@ export function ChemStudio() {
         onCut={() => void cutForFigure()}
         onSaveSvg={() => void downloadSvg()}
         onSendToFigure={() => void sendToFigure()}
+        onAddFavorite={() => void addCurrentToFavorites()}
         onClear={() => void clearSketcher()}
+      />
+      <ChemFavoriteContextMenu
+        menu={favMenu}
+        onClose={() => setFavMenu(null)}
+        onOpenInSketcher={(fav) => void loadFavorite(fav)}
+        onCopyForFigure={(fav) => void copyFavoriteForFigure(fav)}
+        onSendToBioArtist={(fav) => void sendFavoriteToBioArtist(fav)}
+        onRename={renameFavorite}
+        onSaveSvg={downloadFavoriteSvg}
+        onCopySmiles={(fav) => void copyFavoriteSmiles(fav)}
+        onDuplicate={duplicateFavorite}
+        onDelete={deleteFavorite}
       />
     </div>
   );

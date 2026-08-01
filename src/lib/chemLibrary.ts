@@ -218,6 +218,38 @@ export function removeChemStructure(id: string) {
   saveAll(loadAll().filter((s) => s.id !== id));
 }
 
+/** Rename a saved structure in place (keeps id, source, timestamps). */
+export function renameChemStructure(id: string, name: string): ChemStructure | null {
+  const list = loadAll();
+  const idx = list.findIndex((s) => s.id === id);
+  if (idx < 0) return null;
+  const trimmed = name.trim();
+  if (!trimmed) return list[idx] ?? null;
+  const next: ChemStructure = { ...list[idx]!, name: trimmed };
+  const copy = [...list];
+  copy[idx] = next;
+  saveAll(copy);
+  return next;
+}
+
+/** Duplicate a structure (new id); optional name suffix. */
+export function duplicateChemStructure(
+  id: string,
+  opts?: { nameSuffix?: string; source?: ChemStructure['source'] },
+): ChemStructure | null {
+  const src = loadAll().find((s) => s.id === id);
+  if (!src) return null;
+  const suffix = opts?.nameSuffix ?? ' copy';
+  return upsertChemStructure({
+    name: `${src.name}${suffix}`,
+    smiles: src.smiles,
+    svg: src.svg,
+    source: opts?.source ?? src.source,
+    style: src.style,
+    molfile: src.molfile,
+  });
+}
+
 export function pushRecentFromSmiles(
   smiles: string,
   name: string,

@@ -144,4 +144,8 @@ export type BaObject = FabricObject & {
   baId?: string;
   baName?: string;
   baLocked?: boolean;
+  /** Shared id linking a reaction arrow to its reagent labels */
+  baReactionId?: string;
+  /** Role within a reaction assembly */
+  baReagentSlot?: 'arrow' | 'top' | 'bottom';
 };

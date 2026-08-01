@@ -1,5 +1,11 @@
-import { Library, Type } from 'lucide-react';
-import { addLine, addShape, addText } from '../../lib/canvasController';
+import { ArrowRight, FlaskConical, Library, Type } from 'lucide-react';
+import {
+  addLine,
+  addReactionArrowWithReagents,
+  addReagentsToSelectedArrow,
+  addShape,
+  addText,
+} from '../../lib/canvasController';
 import { LINE_ITEMS, SHAPE_ITEMS } from '../../data/shapesCatalog';
 import { useAppStore } from '../../store/appStore';
 import type { LineKind, ShapeKind } from '../../types';
@@ -27,6 +33,7 @@ function BackToLibraryButton() {
 export function ShapeLinePanel() {
   const tool = useAppStore((s) => s.tool);
   const showToast = useAppStore((s) => s.showToast);
+  const selectionCount = useAppStore((s) => s.selectionCount);
 
   if (tool === 'text') {
     return (
@@ -93,11 +100,63 @@ export function ShapeLinePanel() {
   }
 
   if (tool === 'lines') {
+    const canAttach = selectionCount === 1;
+
     return (
       <aside className="ba-left-panel">
         <div className="ba-panel-header">Lines & arrows</div>
         <BackToLibraryButton />
-        <div className="ba-panel-sub">Solid, dashed, curves, and arrows.</div>
+
+        <div className="ba-panel-sub" style={{ paddingTop: 0 }}>
+          Reaction scheme — start here
+        </div>
+        <div className="ba-reaction-tools">
+          <button
+            type="button"
+            className="ba-btn ba-btn-primary ba-reaction-main-btn"
+            title="Straight arrow with reagent labels above and below"
+            onClick={() => {
+              addReactionArrowWithReagents();
+              showToast(
+                'Reaction arrow added in the center of the canvas — double-click labels to edit',
+              );
+            }}
+          >
+            <span className="ba-reaction-main-icon" aria-hidden>
+              <FlaskConical size={15} />
+              <ArrowRight size={14} />
+            </span>
+            + Reaction arrow + reagents
+          </button>
+          <p className="ba-reaction-hint">
+            Places a straight arrow with <strong>top</strong> and <strong>bottom</strong> text
+            boxes, centered and equidistant. Double-click a box to type reagents / conditions.
+            Select a box alone to move or delete it. Paste Chem Studio structures nearby if needed.
+          </p>
+          <button
+            type="button"
+            className="ba-btn ba-btn-sm"
+            style={{ width: '100%' }}
+            disabled={!canAttach}
+            title={
+              canAttach
+                ? 'Add top & bottom reagent boxes to the selected arrow'
+                : 'Select one arrow on the canvas first'
+            }
+            onClick={() => {
+              const ok = addReagentsToSelectedArrow();
+              showToast(
+                ok
+                  ? 'Reagent boxes added above and below the selection'
+                  : 'Select a single arrow first',
+              );
+            }}
+          >
+            Add reagents to selected arrow
+          </button>
+        </div>
+
+        <div className="ba-panel-sub">Solid, dashed, curves, and arrows</div>
         <div className="ba-mini-grid">
           {LINE_ITEMS.map((s) => (
             <button

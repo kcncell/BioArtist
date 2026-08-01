@@ -781,6 +781,45 @@ button:disabled {
   pointer-events: none;
 }
 
+/* Reaction arrow + reagent labels (Lines panel) */
+.ba-reaction-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.ba-reaction-main-btn {
+  width: 100%;
+  height: auto;
+  min-height: 40px;
+  padding: 8px 12px;
+  justify-content: center;
+  gap: 8px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.25;
+}
+
+.ba-reaction-main-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.ba-reaction-hint {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--ba-text-muted);
+}
+
+.ba-reaction-hint strong {
+  color: var(--ba-text-secondary);
+  font-weight: 600;
+}
+
 /* Compact shape / line palette — 4 across, ~1/4 visual size */
 .ba-mini-grid {
   display: grid;
@@ -2254,6 +2293,56 @@ button:disabled {
   min-height: 0;
   width: 100%;
   height: 100%;
+  position: relative;
+}
+
+.ba-ketcher-host--drop-active {
+  outline: 2px dashed var(--ba-accent, #3b82f6);
+  outline-offset: -4px;
+  border-radius: 6px;
+}
+
+/* Alignment guides while dragging a selected structure in Chem Studio */
+.ba-ketcher-align-guides {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 30;
+  overflow: visible;
+}
+
+.ba-ketcher-drop-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: rgba(59, 130, 246, 0.08);
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+/* ⌘/Ctrl + drag marquee overlay (Chem Studio structure selection) */
+.ba-ketcher-marquee {
+  display: none;
+  position: fixed;
+  z-index: 10050;
+  box-sizing: border-box;
+  border: 1.5px dashed #3b82f6;
+  background: rgba(59, 130, 246, 0.12);
+  pointer-events: none;
+  border-radius: 2px;
+}
+
+body.ba-ketcher-marquee-active {
+  cursor: crosshair !important;
+  user-select: none;
 }
 
 /* Full main-canvas styled molecule view (ball-stick / CPK / wire) */
@@ -2366,6 +2455,13 @@ button:disabled {
   padding-bottom: 16px;
 }
 
+.ba-chem-reaction-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px 10px;
+}
+
 .ba-chem-style-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2433,6 +2529,11 @@ button:disabled {
   display: flex;
   align-items: stretch;
   gap: 4px;
+  cursor: grab;
+}
+
+.ba-chem-fav-item:active {
+  cursor: grabbing;
 }
 
 .ba-chem-fav-thumb {
@@ -2445,7 +2546,7 @@ button:disabled {
   border: 1px solid var(--ba-border);
   background: var(--ba-surface-2);
   color: var(--ba-text);
-  cursor: pointer;
+  cursor: grab;
   text-align: left;
   min-width: 0;
 }
@@ -3013,6 +3114,19 @@ button:disabled {
   color: var(--ba-text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   letter-spacing: 0.02em;
+}
+
+.ba-ctx-heading {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ba-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+  user-select: none;
+  pointer-events: none;
 }
 
 .ba-ctx-menu button:hover:not(:disabled) .ba-ctx-kbd {

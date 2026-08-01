@@ -94,7 +94,18 @@ type Cand = {
   to: number;
   /** Prefer same-edge matches (left-left, cx-cx) over cross matches */
   sameKind: boolean;
+  movingKey: EdgeKey;
+  targetKey: EdgeKey;
 };
+
+function isCenterKey(k: EdgeKey): boolean {
+  return k === 'cx' || k === 'cy';
+}
+
+/** Center-to-center (cx↔cx or cy↔cy) — primary “structure middle” alignment */
+function isCenterToCenter(c: Cand): boolean {
+  return isCenterKey(c.movingKey) && isCenterKey(c.targetKey) && c.sameKind;
+}
 
 /**
  * Compute snap deltas + guides for a moving object against others and the artboard.
@@ -103,10 +114,21 @@ export function computeAlignSnap(
   moving: Bounds,
   targets: Bounds[],
   artboard: { width: number; height: number },
-  opts?: { snapThreshold?: number; approachThreshold?: number },
+  opts?: {
+    snapThreshold?: number;
+    approachThreshold?: number;
+    /**
+     * When true, prefer center–center alignment over edges when both are nearby
+     * (Chem Studio multi-structure layout).
+     */
+    preferCenter?: boolean;
+    /** Skip artboard edges/centers (use for free-canvas chem sketcher). */
+    skipArtboard?: boolean;
+  },
 ): { dx: number; dy: number; guides: AlignGuide[] } {
   const SNAP = opts?.snapThreshold ?? SNAP_THRESHOLD;
   const APPROACH = opts?.approachThreshold ?? APPROACH_THRESHOLD;
+  const preferCenter = !!opts?.preferCenter;
 
   const artboardTarget: Bounds = {
     left: 0,
@@ -119,7 +141,7 @@ export function computeAlignSnap(
     height: artboard.height,
   };
 
-  const all = [...targets, artboardTarget];
+  const all = opts?.skipArtboard ? [...targets] : [...targets, artboardTarget];
   const xKeys: EdgeKey[] = ['left', 'cx', 'right'];
   const yKeys: EdgeKey[] = ['top', 'cy', 'bottom'];
 
@@ -132,13 +154,18 @@ export function computeAlignSnap(
         const m = edgeValue(moving, mk);
         const targetPos = edgeValue(t, tk);
         const delta = targetPos - m;
-        if (Math.abs(delta) <= APPROACH) {
+        // Centers get a slightly larger approach window when preferCenter is on
+        const limit =
+          preferCenter && mk === 'cx' && tk === 'cx' ? APPROACH * 1.35 : APPROACH;
+        if (Math.abs(delta) <= limit) {
           xCands.push({
             delta,
             targetPos,
             from: Math.min(moving.top, t.top),
             to: Math.max(moving.bottom, t.bottom),
             sameKind: mk === tk,
+            movingKey: mk,
+            targetKey: tk,
           });
         }
       }
@@ -148,13 +175,17 @@ export function computeAlignSnap(
         const m = edgeValue(moving, mk);
         const targetPos = edgeValue(t, tk);
         const delta = targetPos - m;
-        if (Math.abs(delta) <= APPROACH) {
+        const limit =
+          preferCenter && mk === 'cy' && tk === 'cy' ? APPROACH * 1.35 : APPROACH;
+        if (Math.abs(delta) <= limit) {
           yCands.push({
             delta,
             targetPos,
             from: Math.min(moving.left, t.left),
             to: Math.max(moving.right, t.right),
             sameKind: mk === tk,
+            movingKey: mk,
+            targetKey: tk,
           });
         }
       }
@@ -164,14 +195,36 @@ export function computeAlignSnap(
   function resolveAxis(cands: Cand[], axis: 'x' | 'y') {
     if (!cands.length) return { delta: 0, guides: [] as AlignGuide[] };
 
-    // Closest first; prefer same-kind (center-center, left-left) on ties
+    // Score: lower is better. Prefer center–center when enabled so middles snap
+    // even if an edge is a hair closer.
+    const score = (c: Cand) => {
+      let s = Math.abs(c.delta);
+      if (preferCenter && isCenterToCenter(c)) {
+        // Pull center matches forward so they win over nearby edges
+        s -= SNAP * 0.85;
+      } else if (c.sameKind) {
+        s -= SNAP * 0.05;
+      }
+      return s;
+    };
+
     const sorted = [...cands].sort((a, b) => {
-      const d = Math.abs(a.delta) - Math.abs(b.delta);
-      if (Math.abs(d) > 0.01) return d;
-      return Number(b.sameKind) - Number(a.sameKind);
+      const d = score(a) - score(b);
+      if (Math.abs(d) > 0.001) return d;
+      // Tie-break: center-center, then same-kind, then pure distance
+      if (preferCenter) {
+        const ac = Number(isCenterToCenter(a));
+        const bc = Number(isCenterToCenter(b));
+        if (ac !== bc) return bc - ac;
+      }
+      if (a.sameKind !== b.sameKind) return Number(b.sameKind) - Number(a.sameKind);
+      return Math.abs(a.delta) - Math.abs(b.delta);
     });
     const best = sorted[0];
-    const locked = Math.abs(best.delta) <= SNAP;
+    // Center snaps use a slightly looser lock threshold so middles are easy to hit
+    const lockThresh =
+      preferCenter && isCenterToCenter(best) ? SNAP * 1.25 : SNAP;
+    const locked = Math.abs(best.delta) <= lockThresh;
     const applied = locked ? best.delta : 0;
 
     const byPos = new Map<string, AlignGuide>();

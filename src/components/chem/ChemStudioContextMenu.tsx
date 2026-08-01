@@ -4,6 +4,7 @@ import {
   Download,
   Scissors,
   Send,
+  Star,
   Trash2,
 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
@@ -23,6 +24,7 @@ type Props = {
   onCut: () => void;
   onSaveSvg: () => void;
   onSendToFigure: () => void;
+  onAddFavorite: () => void;
   onClear: () => void;
 };
 
@@ -37,6 +39,7 @@ export function ChemStudioContextMenu({
   onCut,
   onSaveSvg,
   onSendToFigure,
+  onAddFavorite,
   onClear,
 }: Props) {
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -109,6 +112,16 @@ export function ChemStudioContextMenu({
         <Download size={14} /> Save as SVG
       </button>
       <Sep />
+      <button
+        type="button"
+        role="menuitem"
+        disabled={!has}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={() => go(onAddFavorite)}
+        title="Save this structure to the Favorites panel on the right"
+      >
+        <Star size={14} /> Add to favorites
+      </button>
       <button
         type="button"
         role="menuitem"
