@@ -12,17 +12,127 @@ export interface PasteResult {
   smiles?: string;
 }
 
-/** Pull a full <svg>…</svg> block out of plain text or HTML. */
+/** Decode common HTML entities so entity-escaped SVG in text/html can be parsed. */
+function decodeHtmlEntities(raw: string): string {
+  if (!raw.includes('&')) return raw;
+  return raw
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&');
+}
+
+/** Pull a full <svg>…</svg> block out of plain text, HTML, or entity-escaped markup. */
 export function extractSvgMarkup(raw: string): string | null {
-  if (!raw || !raw.includes('<svg')) return null;
-  const match = raw.match(/<svg\b[\s\S]*?<\/svg>/i);
-  if (match) return match[0].trim();
-  if (/<svg\b/i.test(raw) && /<\/svg>/i.test(raw)) {
-    const start = raw.search(/<svg\b/i);
-    const end = raw.toLowerCase().lastIndexOf('</svg>');
-    if (start >= 0 && end > start) return raw.slice(start, end + 6).trim();
+  if (!raw) return null;
+  const candidates = [raw];
+  if (raw.includes('&lt;') || raw.includes('&LT;')) {
+    candidates.push(decodeHtmlEntities(raw));
+  }
+  for (const text of candidates) {
+    if (!/<svg\b/i.test(text)) continue;
+    const match = text.match(/<svg\b[\s\S]*?<\/svg>/i);
+    if (match) return match[0].trim();
+    if (/<\/svg>/i.test(text)) {
+      const start = text.search(/<svg\b/i);
+      const end = text.toLowerCase().lastIndexOf('</svg>');
+      if (start >= 0 && end > start) return text.slice(start, end + 6).trim();
+    }
   }
   return null;
+}
+
+/** True when the snap has *extractable* graphic payload (not merely a type string). */
+export function snapHasSystemGraphic(snap: ClipboardSnap): boolean {
+  if (snap.svgBlobs.length > 0 || snap.imageBlobs.length > 0) return true;
+  if (
+    snap.files.some(
+      (f) =>
+        f.type.startsWith('image/') ||
+        f.type === 'image/svg+xml' ||
+        f.name.toLowerCase().endsWith('.svg'),
+    )
+  ) {
+    return true;
+  }
+  if (extractSvgMarkup(snap.plain) || extractSvgMarkup(snap.html)) return true;
+  for (const x of snap.extras) {
+    if (extractSvgMarkup(x)) return true;
+  }
+  const plain = snap.plain.trim();
+  if (/^data:image\//i.test(plain)) return true;
+  if (/\.svg(\?|#|$)/i.test(plain) && /^https?:\/\//i.test(plain)) return true;
+  return false;
+}
+
+/** Prefer candidates that contain real SVG markup (Bioicons text representation). */
+function preferSvgText(a: string, b: string): string {
+  const aSvg = !!extractSvgMarkup(a);
+  const bSvg = !!extractSvgMarkup(b);
+  if (bSvg && !aSvg) return b;
+  if (aSvg && !bSvg) return a;
+  // Both SVG or neither: prefer the longer non-empty string (full icon file vs stub)
+  if ((bSvg && aSvg) || (!aSvg && !bSvg)) {
+    if (b.trim().length > a.trim().length) return b;
+  }
+  return a || b;
+}
+
+/** First SVG markup found in a snap (plain / html / extras). */
+export function extractSvgFromSnap(snap: ClipboardSnap): string | null {
+  return (
+    extractSvgMarkup(snap.plain) ||
+    extractSvgMarkup(snap.html) ||
+    snap.extras.map((x) => extractSvgMarkup(x)).find(Boolean) ||
+    null
+  );
+}
+
+/**
+ * Merge two snaps, preferring whichever side has real SVG / image blobs.
+ * Used so Cmd+V (event + async) matches right-click (async-only) behavior.
+ */
+export function mergeSnapsPreferGraphic(eventSnap: ClipboardSnap, asyncSnap: ClipboardSnap): ClipboardSnap {
+  const asyncHasSvg =
+    asyncSnap.svgBlobs.length > 0 || !!extractSvgFromSnap(asyncSnap);
+  const eventHasSvg =
+    eventSnap.svgBlobs.length > 0 || !!extractSvgFromSnap(eventSnap);
+  const asyncHasImg = asyncSnap.imageBlobs.length > 0 || asyncSnap.files.some((f) => f.type.startsWith('image/'));
+  const eventHasImg = eventSnap.imageBlobs.length > 0 || eventSnap.files.some((f) => f.type.startsWith('image/'));
+
+  // Prefer async when it has SVG and event does not (common Brave Cmd+V case)
+  const preferAsync = (asyncHasSvg && !eventHasSvg) || (!eventHasSvg && !eventHasImg && (asyncHasSvg || asyncHasImg));
+
+  const primary = preferAsync ? asyncSnap : eventSnap;
+  const secondary = preferAsync ? eventSnap : asyncSnap;
+
+  return {
+    plain: preferSvgText(primary.plain, secondary.plain),
+    html: preferSvgText(primary.html, secondary.html),
+    extras: [...primary.extras, ...secondary.extras],
+    files: [...primary.files, ...secondary.files],
+    imageBlobs: [...primary.imageBlobs, ...secondary.imageBlobs],
+    svgBlobs: [...primary.svgBlobs, ...secondary.svgBlobs],
+    types: [...new Set([...primary.types, ...secondary.types])],
+  };
+}
+
+/**
+ * Light cleanup so Fabric can load Inkscape / Bioicons SVGs more reliably.
+ * Strips XML prologue only; keeps drawing content.
+ */
+export function prepareSvgForCanvas(svg: string): string {
+  let s = svg.trim();
+  // Drop XML / DOCTYPE so the parser starts at <svg>
+  s = s.replace(/^<\?xml[\s\S]*?\?>/i, '').trim();
+  s = s.replace(/<!DOCTYPE[\s\S]*?>/i, '').trim();
+  // Ensure root has xmlns (some clipboard payloads omit it)
+  if (/^<svg\b/i.test(s) && !/\sxmlns\s*=/i.test(s.slice(0, 400))) {
+    s = s.replace(/^<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+  }
+  return s;
 }
 
 function guessNameFromSvg(svg: string): string {
@@ -116,18 +226,21 @@ export function allTextCandidates(snap: ClipboardSnap): string[] {
   };
   push(snap.plain);
   for (const x of snap.extras) push(x);
-  // HTML sometimes wraps SMILES as plain body text
-  if (snap.html && !extractSvgMarkup(snap.html)) {
-    const stripped = snap.html
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/p>/gi, '\n')
-      .replace(/<[^>]+>/g, '')
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&amp;/g, '&')
-      .trim();
-    push(stripped);
+  // Prefer raw HTML (may contain <svg> or entity-escaped SVG from Bioicons)
+  if (snap.html) {
+    push(snap.html);
+    const decoded = decodeHtmlEntities(snap.html);
+    if (decoded !== snap.html) push(decoded);
+    // Also stripped body text for SMILES-only pastes
+    if (!extractSvgMarkup(snap.html) && !extractSvgMarkup(decoded)) {
+      const stripped = decoded
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>/gi, '\n')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .trim();
+      push(stripped);
+    }
   }
   return out;
 }
@@ -195,10 +308,11 @@ export function extractChemFromSnap(snap: ClipboardSnap): { kind: 'smiles' | 'mo
 
 export function clipboardLooksPasteable(snap: ClipboardSnap): boolean {
   // Chem Studio "Copy for figure" bridge (localStorage) — works even when system clipboard is empty
-  if (readChemClipboard()?.svg || readChemClipboard()?.smiles) return true;
-  if (snap.files.length || snap.imageBlobs.length || snap.svgBlobs.length) return true;
-  if (extractSvgMarkup(snap.plain) || extractSvgMarkup(snap.html)) return true;
-  if (/^data:image\//i.test(snap.plain.trim())) return true;
+  {
+    const c = readChemClipboard();
+    if (c?.svg || c?.pngDataUrl || c?.smiles) return true;
+  }
+  if (snapHasSystemGraphic(snap)) return true;
   if (extractChemFromSnap(snap)) return true;
   // Any non-empty plain text: we will try RDKit later (Ketcher formats vary)
   if (snap.plain.trim().length > 0 && snap.plain.trim().length < 2000) return true;
@@ -254,6 +368,14 @@ async function chemTextToPasteResult(
 function pasteFromChemStudioClipboard(): PasteResult | null {
   const chemClip = readChemClipboard();
   if (!chemClip) return null;
+  // Prefer transparent 3D PNG snapshot when present (ball-and-stick export)
+  if (chemClip.pngDataUrl?.startsWith('data:image/')) {
+    return {
+      kind: 'image',
+      name: chemClip.name || 'Molecule 3D',
+      dataUrl: chemClip.pngDataUrl,
+    };
+  }
   if (chemClip.svg) {
     const svg = stripOpaqueBackgroundRects(chemClip.svg);
     try {
@@ -272,20 +394,99 @@ function pasteFromChemStudioClipboard(): PasteResult | null {
 }
 
 export async function resolveClipboardSnapshot(snap: ClipboardSnap): Promise<PasteResult> {
-  // Files (Finder / Explorer copy)
+  // --- Graphics first (Bioicons copies image + SVG text) ---
+
+  // Files (Finder / Explorer / site "copy as file")
   for (const file of snap.files) {
     const lower = file.name.toLowerCase();
-    if (file.type === 'image/svg+xml' || lower.endsWith('.svg')) {
+    if (file.type === 'image/svg+xml' || lower.endsWith('.svg') || /svg/i.test(file.type)) {
       const text = await file.text();
-      const svg = extractSvgMarkup(text);
+      const svg = extractSvgMarkup(text) || (text.includes('<svg') ? text.trim() : null);
       if (svg) {
         return {
           kind: 'svg',
           name: file.name.replace(/\.svg$/i, '') || guessNameFromSvg(svg),
-          svgContent: svg,
+          svgContent: prepareSvgForCanvas(svg),
         };
       }
     }
+  }
+
+  for (const blob of snap.svgBlobs) {
+    const text = await blob.text();
+    const svg = extractSvgMarkup(text) || (text.includes('<svg') ? text.trim() : null);
+    if (svg) return { kind: 'svg', name: guessNameFromSvg(svg), svgContent: prepareSvgForCanvas(svg) };
+  }
+
+  // Text / HTML candidates (Bioicons: text representation of the SVG)
+  for (const t of allTextCandidates(snap)) {
+    const svg = extractSvgMarkup(t);
+    if (svg) return { kind: 'svg', name: guessNameFromSvg(svg), svgContent: prepareSvgForCanvas(svg) };
+  }
+
+  const dataSvg = snap.plain.trim().match(/^data:image\/svg\+xml[^,]*,([\s\S]+)$/i);
+  if (dataSvg) {
+    try {
+      let decoded = dataSvg[1];
+      if (/^charset=/i.test(decoded) || snap.plain.includes(';base64,')) {
+        const comma = snap.plain.indexOf(',');
+        decoded = snap.plain.slice(comma + 1);
+      }
+      if (/;base64,/i.test(snap.plain.slice(0, 80))) {
+        decoded = atob(decoded);
+      } else {
+        decoded = decodeURIComponent(decoded);
+      }
+      const svg = extractSvgMarkup(decoded) || (decoded.includes('<svg') ? decoded : null);
+      if (svg) return { kind: 'svg', name: guessNameFromSvg(svg), svgContent: prepareSvgForCanvas(svg) };
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // URL pointing at an SVG (CDN link / bioicons path)
+  const urlPlain = snap.plain.trim();
+  if (/^https?:\/\//i.test(urlPlain) && /\.svg(\?|#|$)/i.test(urlPlain)) {
+    try {
+      const res = await fetch(urlPlain);
+      if (res.ok) {
+        const text = await res.text();
+        const svg = extractSvgMarkup(text) || (text.includes('<svg') ? text.trim() : null);
+        if (svg) {
+          const base = urlPlain.split('/').pop()?.replace(/\.svg$/i, '') || 'icon';
+          return {
+            kind: 'svg',
+            name: decodeURIComponent(base).replace(/[-_]+/g, ' '),
+            svgContent: prepareSvgForCanvas(svg),
+          };
+        }
+      }
+    } catch {
+      /* CORS or network */
+    }
+  }
+
+  // Raster image from Bioicons (they put PNG alongside SVG text — use if no SVG)
+  for (const file of snap.files) {
+    if (file.type.startsWith('image/') && file.type !== 'image/svg+xml') {
+      return {
+        kind: 'image',
+        name: file.name.replace(/\.[^.]+$/, '') || 'Pasted image',
+        dataUrl: await fileToDataUrl(file),
+      };
+    }
+  }
+  for (const { blob } of snap.imageBlobs) {
+    return {
+      kind: 'image',
+      name: 'Pasted image',
+      dataUrl: await fileToDataUrl(blob),
+    };
+  }
+
+  // Chem files / SMILES after graphics so path data in SVG never steals the paste
+  for (const file of snap.files) {
+    const lower = file.name.toLowerCase();
     if (
       lower.endsWith('.smi') ||
       lower.endsWith('.smiles') ||
@@ -304,76 +505,26 @@ export async function resolveClipboardSnapshot(snap: ClipboardSnap): Promise<Pas
         );
         if (drawn.kind !== 'none') return drawn;
       }
-      // Last resort: try whole file as SMILES
       const drawn = await chemTextToPasteResult(text.trim(), file.name.replace(/\.[^.]+$/, ''));
       if (drawn.kind !== 'none') return drawn;
     }
-    if (file.type.startsWith('image/')) {
-      return {
-        kind: 'image',
-        name: file.name.replace(/\.[^.]+$/, '') || 'Pasted image',
-        dataUrl: await fileToDataUrl(file),
-      };
-    }
   }
 
-  for (const blob of snap.svgBlobs) {
-    const text = await blob.text();
-    const svg = extractSvgMarkup(text);
-    if (svg) return { kind: 'svg', name: guessNameFromSvg(svg), svgContent: svg };
-  }
-
-  const fromPlain = extractSvgMarkup(snap.plain);
-  if (fromPlain) {
-    return { kind: 'svg', name: guessNameFromSvg(fromPlain), svgContent: fromPlain };
-  }
-  const fromHtml = extractSvgMarkup(snap.html);
-  if (fromHtml) {
-    return { kind: 'svg', name: guessNameFromSvg(fromHtml), svgContent: fromHtml };
-  }
-
-  const dataSvg = snap.plain.trim().match(/^data:image\/svg\+xml[^,]*,([\s\S]+)$/i);
-  if (dataSvg) {
-    try {
-      let decoded = dataSvg[1];
-      if (/^charset=/i.test(decoded)) {
-        const comma = snap.plain.indexOf(',');
-        decoded = snap.plain.slice(comma + 1);
-      }
-      decoded = decodeURIComponent(decoded);
-      const svg = extractSvgMarkup(decoded) || (decoded.includes('<svg') ? decoded : null);
-      if (svg) return { kind: 'svg', name: guessNameFromSvg(svg), svgContent: svg };
-    } catch {
-      /* ignore */
-    }
-  }
-
-  // Chem Studio / Ketcher: try every text candidate with RDKit
   const chem = extractChemFromSnap(snap);
   if (chem) {
     const drawn = await chemTextToPasteResult(chem.text);
     if (drawn.kind !== 'none') return drawn;
   }
   for (const t of allTextCandidates(snap)) {
-    if (t.length > 2000) continue;
+    if (t.length > 2000 || extractSvgMarkup(t)) continue;
     const drawn = await chemTextToPasteResult(t);
     if (drawn.kind !== 'none') return drawn;
   }
 
-  for (const { blob } of snap.imageBlobs) {
-    return {
-      kind: 'image',
-      name: 'Pasted image',
-      dataUrl: await fileToDataUrl(blob),
-    };
-  }
-
-  // Chem Studio → figure bridge (localStorage). Used when system clipboard is empty
-  // or browser blocked clipboard write in the studio tab.
+  // Chem Studio → figure bridge (localStorage) only when OS clipboard had nothing graphic
   const fromStudio = pasteFromChemStudioClipboard();
   if (fromStudio) return fromStudio;
 
-  // Last resort: SMILES only from Chem Studio clipboard
   const chemClip = readChemClipboard();
   if (chemClip?.smiles) {
     const drawn = await chemTextToPasteResult(chemClip.smiles, chemClip.name);
@@ -384,74 +535,124 @@ export async function resolveClipboardSnapshot(snap: ClipboardSnap): Promise<Pas
 }
 
 /**
- * Prefer Chem Studio bridge first (Copy for figure / Ketcher copy interceptor).
- * Call this from figure paste so studio → figure always wins when a recent
- * structure was copied in Chem Studio.
+ * Resolve paste for the figure canvas.
+ * System SVG/image (Bioicons, Finder, …) always wins over a stale Chem Studio bridge.
  */
 export async function resolveChemStudioOrClipboard(
   snap: ClipboardSnap,
 ): Promise<PasteResult> {
-  const clip = readChemClipboard();
-  if (clip?.svg) {
+  const system = await resolveClipboardSnapshot(snap);
+  // SVG / raster from OS clipboard (Bioicons, etc.)
+  if (system.kind === 'svg' || system.kind === 'image') return system;
+  // SMILES/molfile only when we did not also have a graphic payload
+  if (system.kind === 'chem') return system;
+
+  // Chem Studio localStorage bridge — last resort when OS clipboard is empty
+  if (!snapHasSystemGraphic(snap)) {
     const fromStudio = pasteFromChemStudioClipboard();
     if (fromStudio) return fromStudio;
+    const clip = readChemClipboard();
+    if (clip?.smiles) {
+      const drawn = await chemTextToPasteResult(clip.smiles, clip.name);
+      if (drawn.kind !== 'none') return drawn;
+    }
   }
-  if (clip?.smiles) {
-    const drawn = await chemTextToPasteResult(clip.smiles, clip.name);
-    if (drawn.kind !== 'none') return drawn;
-  }
-  // System clipboard (SVG / SMILES / images)
-  const system = await resolveClipboardSnapshot(snap);
-  if (system.kind !== 'none') return system;
-  // resolveClipboardSnapshot already tries chem bridge at the end; try once more
-  return pasteFromChemStudioClipboard() || { kind: 'none' };
+
+  return { kind: 'none' };
 }
 
 /**
- * Async fallback when paste event has empty plain text (some browsers / apps).
- * Must be called from a user-gesture paste handler.
+ * Merge async Clipboard API into the paste-event snap.
+ *
+ * Always reads when possible: Cmd+V event data in Brave/Chrome can lag behind
+ * or carry stale text/plain while image/svg+xml lives only on the async API
+ * (right-click paste already used async-only and worked).
  */
 export async function enrichSnapFromAsyncClipboard(snap: ClipboardSnap): Promise<ClipboardSnap> {
-  if (snap.plain.trim() || snap.extras.length) return snap;
+  let plain = snap.plain;
+  let html = snap.html;
+  const extras = [...snap.extras];
+  const files = [...snap.files];
+  const imageBlobs = [...snap.imageBlobs];
+  const svgBlobs = [...snap.svgBlobs];
+  const types = new Set(snap.types);
+
+  // readText: prefer async when it has SVG and event plain does not
   try {
     if (navigator.clipboard?.readText) {
       const t = await navigator.clipboard.readText();
       if (t?.trim()) {
-        return { ...snap, plain: t };
+        plain = preferSvgText(plain, t);
+        if (t !== plain && extractSvgMarkup(t)) {
+          // keep non-svg event plain as extra for chem fallback
+          if (snap.plain.trim() && !extractSvgMarkup(snap.plain)) extras.push(snap.plain);
+        } else if (plain !== t && t.trim()) {
+          extras.push(t);
+        }
       }
     }
   } catch {
     /* permission / not available */
   }
+
+  // Full ClipboardItem read — always merge (do not skip when event looks non-empty)
   try {
     if (navigator.clipboard?.read) {
       const items = await navigator.clipboard.read();
-      const extras = [...snap.extras];
-      let plain = snap.plain;
       for (const item of items) {
         for (const type of item.types) {
-          if (type.startsWith('text/') || type.startsWith('chemical/')) {
+          types.add(type);
+          try {
             const blob = await item.getType(type);
-            const text = await blob.text();
-            if (!text.trim()) continue;
-            if (type === 'text/plain' || type === 'text') plain = text;
-            else extras.push(text);
+            if (type === 'image/svg+xml' || type === 'image/svg') {
+              svgBlobs.push(blob);
+            } else if (type.startsWith('image/')) {
+              imageBlobs.push({ type, blob });
+            } else if (type.startsWith('text/') || type.startsWith('chemical/')) {
+              const text = await blob.text();
+              if (!text.trim()) continue;
+              if (type === 'text/plain' || type === 'text') {
+                const merged = preferSvgText(plain, text);
+                if (merged !== plain && plain.trim() && !extractSvgMarkup(plain)) {
+                  extras.push(plain);
+                }
+                plain = merged;
+                if (text !== plain && extractSvgMarkup(text) === null) extras.push(text);
+              } else if (type === 'text/html') {
+                html = preferSvgText(html, text);
+                if (text !== html) extras.push(text);
+              } else {
+                extras.push(text);
+              }
+            }
+          } catch {
+            /* per-type read may fail */
           }
         }
       }
-      return { ...snap, plain, extras };
     }
   } catch {
     /* ignore */
   }
-  return snap;
+
+  return {
+    plain,
+    html,
+    extras,
+    files,
+    imageBlobs,
+    svgBlobs,
+    types: [...types],
+  };
 }
 
 export async function pasteOntoCanvas(result: PasteResult): Promise<boolean> {
   if ((result.kind === 'svg' || result.kind === 'chem') && result.svgContent) {
-    await addSvgToCanvas(result.svgContent, {
+    const svg =
+      result.kind === 'svg' ? prepareSvgForCanvas(result.svgContent) : result.svgContent;
+    await addSvgToCanvas(svg, {
       name: result.name || (result.kind === 'chem' ? 'Molecule' : 'Pasted SVG'),
-      maxSize: result.kind === 'chem' ? 200 : undefined,
+      maxSize: result.kind === 'chem' ? 200 : 220,
     });
     return true;
   }

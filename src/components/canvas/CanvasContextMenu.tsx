@@ -141,7 +141,6 @@ export function CanvasContextMenu({ menu, onClose }: Props) {
 
   const onPaste = async () => {
     try {
-      // 1) Chem Studio bridge first (Copy for figure / Ketcher copy)
       let snap: ClipboardSnap = {
         plain: '',
         html: '',
@@ -151,10 +150,10 @@ export function CanvasContextMenu({ menu, onClose }: Props) {
         svgBlobs: [],
         types: [],
       };
+      // Async Clipboard API (required for right-click paste — no ClipboardEvent data)
       snap = await enrichSnapFromAsyncClipboard(snap);
       let result = await resolveChemStudioOrClipboard(snap);
 
-      // 2) Internal canvas object buffer
       if (result.kind === 'none' && hasObjectClipboard()) {
         const ok = await pasteObjectClipboard();
         if (ok) {
@@ -165,7 +164,7 @@ export function CanvasContextMenu({ menu, onClose }: Props) {
 
       if (result.kind === 'none') {
         showToast(
-          'Nothing to paste — Chem Studio: right-click → Copy for figure',
+          'Nothing to paste — copy an icon on bioicons.com (Chrome/Edge), or Chem Studio → Copy for figure',
         );
         return;
       }
@@ -185,7 +184,11 @@ export function CanvasContextMenu({ menu, onClose }: Props) {
       );
     } catch (e) {
       console.error(e);
-      showToast('Paste failed — Chem Studio: Copy for figure, then try again');
+      showToast(
+        e instanceof Error
+          ? `Paste failed: ${e.message}`
+          : 'Paste failed — re-copy icon on bioicons.com (Chrome/Edge), then try again',
+      );
     } finally {
       onClose();
     }

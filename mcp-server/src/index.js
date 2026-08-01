@@ -97,6 +97,7 @@ server.tool(
         'protein',
         'antibody',
         'flask',
+        'pipette',
         'arrow',
         'circle',
         'hexagon',
@@ -105,7 +106,7 @@ server.tool(
         'cas9_dna',
         'lab_setup',
       ])
-      .describe('Shape / biology template (cas9_dna, lab_setup = flask+tube+pipette+plate)'),
+      .describe('Shape / biology template (pipette, flask, cas9_dna, lab_setup, …)'),
     color: z
       .string()
       .optional()

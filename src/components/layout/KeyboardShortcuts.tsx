@@ -16,6 +16,8 @@ import {
 import {
   allTextCandidates,
   enrichSnapFromAsyncClipboard,
+  extractSvgFromSnap,
+  mergeSnapsPreferGraphic,
   pasteOntoCanvas,
   pasteResultToLibraryIcon,
   resolveChemStudioOrClipboard,
@@ -180,16 +182,32 @@ export function KeyboardShortcuts() {
 
       void (async () => {
         try {
-          // 1) Chem Studio bridge first (Copy for figure / Ketcher copy)
-          //    Must beat canvas object-clipboard so studio → figure always works.
-          let snap2 = snap;
-          if (!snap2.plain.trim()) {
-            snap2 = await enrichSnapFromAsyncClipboard(snap2);
-          }
           useAppStore.getState().showToast('Pasting…');
+          // Merge paste-event data with async Clipboard API.
+          // Brave/Chrome: event text/plain can be stale while Bioicons SVG is on async API
+          // (right-click already used async-only and worked — match that preference).
+          const empty: typeof snap = {
+            plain: '',
+            html: '',
+            extras: [],
+            files: [],
+            imageBlobs: [],
+            svgBlobs: [],
+            types: [],
+          };
+          const fromAsync = await enrichSnapFromAsyncClipboard(empty);
+          const fromEvent = await enrichSnapFromAsyncClipboard(snap);
+          // Prefer the snap that actually has SVG / image payload
+          const snap2 =
+            fromAsync.svgBlobs.length ||
+            extractSvgFromSnap(fromAsync) ||
+            fromAsync.imageBlobs.length
+              ? mergeSnapsPreferGraphic(fromEvent, fromAsync)
+              : fromEvent;
+
           let result = await resolveChemStudioOrClipboard(snap2);
 
-          // 2) Internal canvas object cut/copy buffer
+          // Internal canvas object cut/copy only if OS clipboard empty
           if (result.kind === 'none' && hasObjectClipboard()) {
             const ok = await pasteObjectClipboard();
             if (ok) {
@@ -199,9 +217,9 @@ export function KeyboardShortcuts() {
           }
 
           if (result.kind === 'none') {
-            // One more async clipboard read
-            snap2 = await enrichSnapFromAsyncClipboard(snap2);
-            result = await resolveChemStudioOrClipboard(snap2);
+            result = await resolveChemStudioOrClipboard(
+              mergeSnapsPreferGraphic(fromEvent, fromAsync),
+            );
           }
 
           if (result.kind === 'none') {
@@ -210,8 +228,8 @@ export function KeyboardShortcuts() {
               .getState()
               .showToast(
                 hint
-                  ? `Could not paste (“${hint}…”). In Chem Studio use right-click → Copy for figure.`
-                  : 'Nothing to paste. Chem Studio: right-click → Copy for figure, then paste here.',
+                  ? `Could not paste (“${hint}…”). Re-copy the icon on bioicons.com, then ⌘V.`
+                  : 'Nothing to paste. Copy an icon on bioicons.com, then ⌘V here.',
               );
             return;
           }
@@ -238,7 +256,11 @@ export function KeyboardShortcuts() {
           console.error(err);
           useAppStore
             .getState()
-            .showToast('Paste failed — Chem Studio: Copy for figure, then try again');
+            .showToast(
+              err instanceof Error
+                ? `Paste failed: ${err.message}`
+                : 'Paste failed — try Import SVG or re-copy on bioicons.com',
+            );
         }
       })();
     };

@@ -15,10 +15,13 @@ type KetcherLike = any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type EditorLike = any;
 
-/** Arrow length in model units (Ketcher DEFAULT_LENGTH is 1). */
-const ARROW_LEN = 2.2;
+/**
+ * Arrow length in model units (Ketcher’s click-default is ~1).
+ * Longer so “reagent” / “condition” sit comfortably over the middle of the shaft.
+ */
+const ARROW_LEN = 5.5;
 /** Vertical distance from arrow midline to each label (model units). */
-const LABEL_GAP = 0.85;
+const LABEL_GAP = 0.95;
 
 /**
  * Lexical SerializedEditorState for plain italic-ish reagent text.
@@ -166,12 +169,7 @@ export function addReactionArrowWithReagents(
 
     editor.update(action);
     editor.selection?.(null);
-    // Return to structure select so user can click labels/arrow
-    try {
-      editor.tool?.('select', 'fragment');
-    } catch {
-      /* ignore */
-    }
+    // Leave the active toolbar tool alone (caller may reassertLastTool)
     return { ok: true, mode: 'new-arrow' };
   } catch (err) {
     console.error('[ChemStudio] addReactionArrowWithReagents', err);
@@ -213,11 +211,7 @@ export function addReagentsToSelectedArrow(
       opts?.bottomText ?? 'condition',
     );
     editor.update(action);
-    try {
-      editor.tool?.('select', 'fragment');
-    } catch {
-      /* ignore */
-    }
+    // Leave the active toolbar tool alone (caller may reassertLastTool)
     return { ok: true, mode: 'labels-only' };
   } catch (err) {
     console.error('[ChemStudio] addReagentsToSelectedArrow', err);

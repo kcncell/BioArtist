@@ -17,7 +17,13 @@ export default defineConfig({
   // Ketcher / Indigo WASM (Chem Studio only)
   assetsInclude: ['**/*.wasm'],
   optimizeDeps: {
-    include: ['ketcher-core', 'ketcher-react', 'ketcher-standalone', 'indigo-ketcher'],
+    include: [
+      'ketcher-core',
+      'ketcher-react',
+      'ketcher-standalone',
+      'indigo-ketcher',
+      '3dmol/build/3Dmol.es6.js',
+    ],
   },
   worker: {
     format: 'es',

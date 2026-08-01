@@ -15,6 +15,8 @@ export type ChemCtxMenuState = {
   y: number;
   /** True when sketcher has a molecule we can copy */
   hasStructure: boolean;
+  /** When true, copy uses the current 3D ball-and-stick camera view */
+  is3dView?: boolean;
 };
 
 type Props = {
@@ -69,6 +71,7 @@ export function ChemStudioContextMenu({
   if (!menu) return null;
 
   const has = menu.hasStructure;
+  const is3d = !!menu.is3dView;
 
   const go = (fn: () => void) => {
     try {
@@ -86,9 +89,14 @@ export function ChemStudioContextMenu({
         disabled={!has}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={() => go(onCopy)}
-        title="Copy figure-ready structure (SVG + SMILES) for paste on BioArtist canvas"
+        title={
+          is3d
+            ? 'Copy the current rotated 3D view (transparent PNG) for BioArtist paste'
+            : 'Copy figure-ready structure (SVG + SMILES) for paste on BioArtist canvas'
+        }
       >
-        <ClipboardCopy size={14} /> Copy for figure
+        <ClipboardCopy size={14} />{' '}
+        {is3d ? 'Copy this 3D view for figure' : 'Copy for figure'}
         <span className="ba-ctx-kbd">⌘C</span>
       </button>
       <button
@@ -118,9 +126,9 @@ export function ChemStudioContextMenu({
         disabled={!has}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={() => go(onAddFavorite)}
-        title="Save this structure to the Favorites panel on the right"
+        title="Save the selected molecule only (or the whole canvas if nothing is selected)"
       >
-        <Star size={14} /> Add to favorites
+        <Star size={14} /> Add selected to favorites
       </button>
       <button
         type="button"

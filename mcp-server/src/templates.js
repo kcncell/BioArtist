@@ -12,6 +12,7 @@ export const TEMPLATES = {
   protein: { category: 'protein', description: 'Globular protein blob' },
   antibody: { category: 'protein', description: 'Y-shaped antibody' },
   flask: { category: 'lab', description: 'Erlenmeyer flask' },
+  pipette: { category: 'lab', description: 'Micropipette with tip' },
   arrow: { category: 'arrows', description: 'Straight process arrow' },
   circle: { category: 'symbols', description: 'Soft circle badge' },
   hexagon: { category: 'symbols', description: 'Hexagon molecule-like badge' },
@@ -111,6 +112,20 @@ export function buildFromTemplate(template, opts) {
         stroke="${s}" stroke-width="2" fill="${light}"/>
   <path d="M18 58 L62 58 L58 68 L22 68 Z" fill="${p}" opacity="0.65"/>
   <rect x="28" y="8" width="24" height="6" rx="2" fill="${s}"/>
+`);
+    case 'pipette':
+      // Micropipette: plunger → body → shaft → tip (vertical, lab-style)
+      return svgWrap(`
+  <rect x="34" y="3" width="12" height="7" rx="2.5" fill="${s}"/>
+  <rect x="36" y="9" width="8" height="5" rx="1.5" fill="${p}"/>
+  <rect x="30" y="14" width="20" height="26" rx="5" fill="${light}" stroke="${s}" stroke-width="1.5"/>
+  <rect x="34" y="20" width="12" height="10" rx="2" fill="#ffffff" opacity="0.85" stroke="${p}" stroke-width="1"/>
+  <line x1="36" y1="25" x2="44" y2="25" stroke="${s}" stroke-width="0.9" stroke-linecap="round"/>
+  <rect x="35" y="40" width="10" height="16" rx="2.5" fill="${light}" stroke="${s}" stroke-width="1.3"/>
+  <rect x="33" y="54" width="14" height="6" rx="2" fill="${p}" opacity="0.9"/>
+  <path d="M35 60 L33 70 L47 70 L45 60 Z" fill="${light}" stroke="${s}" stroke-width="1.2"/>
+  <path d="M35 70 L38 76 L42 76 L45 70 Z" fill="${p}" opacity="0.75" stroke="${s}" stroke-width="1"/>
+  <ellipse cx="40" cy="76.5" rx="1.6" ry="1.2" fill="${s}"/>
 `);
     case 'arrow':
       return svgWrap(`

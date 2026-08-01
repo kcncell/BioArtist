@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@rdkit/rdkit": "^2025.3.4-1.0.0",
+    "3dmol": "^2.5.5",
     "fabric": "^7.4.0",
     "jspdf": "^4.2.1",
     "ketcher-react": "^3.17.1",

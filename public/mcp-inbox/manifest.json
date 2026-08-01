@@ -2,6 +2,24 @@
   "version": 1,
   "items": [
     {
+      "id": "mcp/biceps-muscle-ms9uxrvh",
+      "name": "Biceps muscle",
+      "category": "symbols",
+      "filename": "biceps-muscle-ms9uxrvh.svg",
+      "path": "/mcp-inbox/biceps-muscle-ms9uxrvh.svg",
+      "createdAt": "2026-08-01T04:14:35.358Z",
+      "source": "mcp"
+    },
+    {
+      "id": "mcp/pipette-ms9uuycr",
+      "name": "Pipette",
+      "category": "lab",
+      "filename": "pipette-ms9uuycr.svg",
+      "path": "/mcp-inbox/pipette-ms9uuycr.svg",
+      "createdAt": "2026-08-01T04:12:23.788Z",
+      "source": "mcp"
+    },
+    {
       "id": "mcp/flask-eppendorf-pipette-96well",
       "name": "Flask + Eppendorf + pipette → 96-well",
       "category": "lab",

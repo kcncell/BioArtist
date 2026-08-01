@@ -1,4 +1,12 @@
-import { ExternalLink, FolderOpen, Loader2, Package, Sparkles, Trash2 } from 'lucide-react';
+import {
+  ExternalLink,
+  FolderOpen,
+  ImagePlus,
+  Loader2,
+  Package,
+  Sparkles,
+  Trash2,
+} from 'lucide-react';
 import { useRef, useState } from 'react';
 import { loadMcpInboxIcons } from '../../lib/mcpInbox';
 import {
@@ -8,7 +16,15 @@ import {
   type PackId,
   type PackManifest,
 } from '../../lib/packs';
+import { readSvgFiles } from '../../lib/svgImport';
 import { useAppStore } from '../../store/appStore';
+import {
+  EXTERNAL_ART_SOURCES,
+  ExternalArtDialog,
+  openExternalArtTarget,
+  type ExternalArtSourceKey,
+  type ExternalArtTarget,
+} from './ExternalArtDialog';
 
 interface Props {
   bioicons: PackManifest | null;
@@ -31,7 +47,78 @@ export function PackCards({
   const addUserIcons = useAppStore((s) => s.addUserIcons);
   const [busy, setBusy] = useState<string | null>(null);
   const [bioVariant, setBioVariant] = useState<'cc0' | 'full'>('full');
+  const [pendingExternal, setPendingExternal] = useState<ExternalArtTarget | null>(null);
   const nihFolderRef = useRef<HTMLInputElement>(null);
+  const servierFileRef = useRef<HTMLInputElement>(null);
+
+  /** Same license dialog for Bioicons, NIH, Servier, and AI tools. */
+  const requestOpenExternal = (key: ExternalArtSourceKey) => {
+    setPendingExternal(EXTERNAL_ART_SOURCES[key]);
+  };
+
+  const approveExternal = (target: ExternalArtTarget) => {
+    setPendingExternal(null);
+    openExternalArtTarget(target);
+    showToast(`Opened ${target.title} — download or copy art, then import or paste here`);
+  };
+
+  const dialog = (
+    <ExternalArtDialog
+      target={pendingExternal}
+      onCancel={() => setPendingExternal(null)}
+      onApprove={approveExternal}
+    />
+  );
+
+  /** Hide full pack cards while browsing so the icon grid is visible. */
+  if (activeShelf === 'bioicons' && bioicons) {
+    return (
+      <>
+        <div className="ba-pack-browse-bar">
+          <button className="ba-btn ba-btn-sm" type="button" onClick={() => onShelfChange('imports')}>
+            ← Packs
+          </button>
+          <strong>Bioicons</strong>
+          <span className="ba-pack-meta" style={{ margin: 0 }}>
+            {bioicons.counts.total.toLocaleString()} icons
+          </span>
+          <button
+            type="button"
+            className="ba-btn ba-btn-sm"
+            onClick={() => requestOpenExternal('bioicons')}
+            title="Open bioicons.com"
+          >
+            <ExternalLink size={13} /> Website
+          </button>
+        </div>
+        {dialog}
+      </>
+    );
+  }
+
+  if (activeShelf === 'nih' && nih) {
+    return (
+      <>
+        <div className="ba-pack-browse-bar">
+          <button className="ba-btn ba-btn-sm" type="button" onClick={() => onShelfChange('imports')}>
+            ← Packs
+          </button>
+          <strong>NIH BioArt</strong>
+          <span className="ba-pack-meta" style={{ margin: 0 }}>
+            {nih.counts.total.toLocaleString()} icons
+          </span>
+          <button
+            type="button"
+            className="ba-btn ba-btn-sm"
+            onClick={() => requestOpenExternal('nih')}
+          >
+            <ExternalLink size={13} /> Website
+          </button>
+        </div>
+        {dialog}
+      </>
+    );
+  }
 
   const syncMcp = async () => {
     setBusy('mcp');
@@ -105,6 +192,67 @@ export function PackCards({
     }
   };
 
+  /** Servier / general download → My Library (not a separate pack shelf). */
+  const importServierFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setBusy('servier');
+    try {
+      const list = Array.from(files);
+      const svgFiles = list.filter(
+        (f) => f.name.toLowerCase().endsWith('.svg') || f.type === 'image/svg+xml',
+      );
+      const rasterFiles = list.filter((f) =>
+        /^image\/(png|jpeg|jpg|webp|gif)$/i.test(f.type) ||
+        /\.(png|jpe?g|webp|gif)$/i.test(f.name),
+      );
+
+      let n = 0;
+      if (svgFiles.length) {
+        const icons = await readSvgFiles(svgFiles);
+        if (icons.length) {
+          await addUserIcons(icons);
+          n += icons.length;
+        }
+      }
+      for (const file of rasterFiles) {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(String(r.result));
+          r.onerror = () => reject(r.error);
+          r.readAsDataURL(file);
+        });
+        const base = file.name.replace(/\.[^.]+$/, '');
+        await addUserIcons([
+          {
+            id: `user/servier-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            name: base.replace(/[_-]+/g, ' '),
+            category: 'symbols',
+            path: dataUrl,
+            source: 'user',
+            author: 'Servier Medical Art (imported)',
+            licenseLabel: 'CC BY 4.0 — credit required',
+            attributionRequired: true,
+          },
+        ]);
+        n += 1;
+      }
+
+      if (!n) {
+        showToast('No SVG or image files found');
+        return;
+      }
+      onShelfChange('imports');
+      showToast(
+        `Imported ${n} file${n === 1 ? '' : 's'} to My Library — credit Servier (CC BY 4.0) if from SMART`,
+      );
+    } catch (e) {
+      console.error(e);
+      showToast('Import failed');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="ba-pack-cards">
       {/* MCP — always visible at top of My Library packs */}
@@ -154,11 +302,19 @@ export function PackCards({
             <p className="ba-pack-meta">
               {bioicons.counts.total.toLocaleString()} icons installed
               {bioicons.variant ? ` · ${bioicons.variant}` : ''}
+              {' · '}
+              catalog in browser storage; SVGs load from CDN when placed
             </p>
             <div className="ba-pack-actions">
               <button
                 className="ba-btn ba-btn-primary ba-btn-sm"
-                onClick={() => onShelfChange('bioicons')}
+                type="button"
+                onClick={() => {
+                  onShelfChange('bioicons');
+                  showToast(
+                    `Browsing Bioicons — ${bioicons.counts.total.toLocaleString()} icons below. Website: bioicons.com`,
+                  );
+                }}
               >
                 Browse pack
               </button>
@@ -169,6 +325,14 @@ export function PackCards({
                 title="Re-download catalog"
               >
                 Update
+              </button>
+              <button
+                type="button"
+                className="ba-btn ba-btn-sm"
+                onClick={() => requestOpenExternal('bioicons')}
+                title="Open bioicons.com"
+              >
+                <ExternalLink size={13} /> Website
               </button>
               <button
                 className="ba-btn ba-btn-icon"
@@ -218,14 +382,13 @@ export function PackCards({
                   'Add Bioicons pack'
                 )}
               </button>
-              <a
+              <button
+                type="button"
                 className="ba-btn ba-btn-sm"
-                href="https://bioicons.com/"
-                target="_blank"
-                rel="noreferrer"
+                onClick={() => requestOpenExternal('bioicons')}
               >
                 <ExternalLink size={13} /> Site
-              </a>
+              </button>
             </div>
           </>
         )}
@@ -247,7 +410,14 @@ export function PackCards({
               {nih.counts.total.toLocaleString()} SVGs from your folder
             </p>
             <div className="ba-pack-actions">
-              <button className="ba-btn ba-btn-primary ba-btn-sm" onClick={() => onShelfChange('nih')}>
+              <button
+                className="ba-btn ba-btn-primary ba-btn-sm"
+                type="button"
+                onClick={() => {
+                  onShelfChange('nih');
+                  showToast(`Browsing NIH BioArt — ${nih.counts.total.toLocaleString()} icons below`);
+                }}
+              >
                 Browse pack
               </button>
               <button
@@ -256,6 +426,13 @@ export function PackCards({
                 onClick={() => nihFolderRef.current?.click()}
               >
                 Replace folder
+              </button>
+              <button
+                type="button"
+                className="ba-btn ba-btn-sm"
+                onClick={() => requestOpenExternal('nih')}
+              >
+                <ExternalLink size={13} /> Website
               </button>
               <button
                 className="ba-btn ba-btn-icon"
@@ -274,14 +451,13 @@ export function PackCards({
               NIH, then import the folder here — seamless browse like MCP.
             </p>
             <div className="ba-pack-actions">
-              <a
+              <button
+                type="button"
                 className="ba-btn ba-btn-primary ba-btn-sm"
-                href="https://bioart.niaid.nih.gov/"
-                target="_blank"
-                rel="noreferrer"
+                onClick={() => requestOpenExternal('nih')}
               >
                 <ExternalLink size={13} /> Open NIH BioArt
-              </a>
+              </button>
               <button
                 className="ba-btn ba-btn-sm"
                 disabled={busy === 'nih'}
@@ -293,7 +469,7 @@ export function PackCards({
                   </>
                 ) : (
                   <>
-                    <FolderOpen size={14} /> Import SVG folder
+                    <FolderOpen size={14} /> Import downloads
                   </>
                 )}
               </button>
@@ -311,13 +487,119 @@ export function PackCards({
           }}
           type="file"
           multiple
-          accept=".svg,image/svg+xml"
+          accept=".svg,image/svg+xml,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
           hidden
           onChange={(e) => {
             void importNihFolder(e.target.files);
             e.target.value = '';
           }}
         />
+      </div>
+
+      {/* Servier Medical Art */}
+      <div className="ba-pack-card">
+        <div className="ba-pack-card-head">
+          <Package size={18} color="#0d9488" />
+          <div>
+            <strong>Servier Medical Art</strong>
+            <span>3,000+ free medical illustrations · CC BY 4.0</span>
+          </div>
+        </div>
+        <p className="ba-pack-meta">
+          Professional medical art from{' '}
+          <button
+            type="button"
+            className="ba-link-btn"
+            onClick={() => requestOpenExternal('servier')}
+          >
+            smart.servier.com
+          </button>
+          . Download what you need, then import here or paste onto the canvas. Attribution
+          required.
+        </p>
+        <div className="ba-pack-actions">
+          <button
+            type="button"
+            className="ba-btn ba-btn-primary ba-btn-sm"
+            onClick={() => requestOpenExternal('servier')}
+          >
+            <ExternalLink size={13} /> Open Servier SMART
+          </button>
+          <button
+            type="button"
+            className="ba-btn ba-btn-sm"
+            disabled={busy === 'servier'}
+            onClick={() => servierFileRef.current?.click()}
+          >
+            {busy === 'servier' ? (
+              <>
+                <Loader2 size={14} className="ba-spin" /> Importing…
+              </>
+            ) : (
+              <>
+                <FolderOpen size={14} /> Import downloads
+              </>
+            )}
+          </button>
+        </div>
+        <input
+          ref={servierFileRef}
+          type="file"
+          multiple
+          accept=".svg,image/svg+xml,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+          hidden
+          onChange={(e) => {
+            void importServierFiles(e.target.files);
+            e.target.value = '';
+          }}
+        />
+      </div>
+
+      {/* AI image tools — A–Z buttons; caution + prompts in dialog */}
+      <div className="ba-pack-card ba-pack-card--ai">
+        <div className="ba-pack-card-head">
+          <ImagePlus size={18} color="var(--ba-accent)" />
+          <div>
+            <strong>AI image tools</strong>
+            <span>Simple lab icons · not anatomy</span>
+          </div>
+        </div>
+        <p className="ba-pack-meta">
+          Opens ChatGPT, Claude, Gemini, or Grok in a new tab (your login). Best for basic icons
+          (pipette, plate, plate reader). AI can make mistakes — for professional medical art use
+          Bioicons / NIH / Servier. Generate → download or copy → <strong>Import</strong> or{' '}
+          <kbd>⌘V</kbd>. Example prompts appear after you click a tool.
+        </p>
+        <div className="ba-pack-actions">
+          <button
+            type="button"
+            className="ba-btn ba-btn-sm"
+            onClick={() => requestOpenExternal('chatgpt')}
+          >
+            <ExternalLink size={13} /> ChatGPT
+          </button>
+          <button
+            type="button"
+            className="ba-btn ba-btn-sm"
+            onClick={() => requestOpenExternal('claude')}
+          >
+            <ExternalLink size={13} /> Claude
+          </button>
+          <button
+            type="button"
+            className="ba-btn ba-btn-sm"
+            onClick={() => requestOpenExternal('gemini')}
+          >
+            <ExternalLink size={13} /> Gemini
+          </button>
+          <button
+            type="button"
+            className="ba-btn ba-btn-sm"
+            onClick={() => requestOpenExternal('grok')}
+          >
+            <ExternalLink size={13} /> Grok
+          </button>
+        </div>
       </div>
 
       {(bioicons || nih) && (
@@ -346,6 +628,8 @@ export function PackCards({
           )}
         </div>
       )}
+
+      {dialog}
     </div>
   );
 }

@@ -24,6 +24,12 @@ import { useAppStore } from '../../store/appStore';
 import { ContextMenu } from '../ui/ContextMenu';
 import { AiPanel } from './AiPanel';
 import { ChemPanel } from './ChemPanel';
+import {
+  EXTERNAL_ART_SOURCES,
+  ExternalArtDialog,
+  openExternalArtTarget,
+  type ExternalArtTarget,
+} from './ExternalArtDialog';
 import { PackCards } from './PackCards';
 import { PdbPanel } from './PdbPanel';
 import { ShapeLinePanel } from './ShapeLinePanel';
@@ -48,17 +54,26 @@ export function LibraryPanel() {
   const showToast = useAppStore((s) => s.showToast);
   const fileRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLInputElement>(null);
+  const packBrowserRef = useRef<HTMLDivElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [bioiconsPack, setBioiconsPack] = useState<PackManifest | null>(null);
   const [nihPack, setNihPack] = useState<PackManifest | null>(null);
   const [shelf, setShelf] = useState<Shelf>('imports');
   const [packCategory, setPackCategory] = useState('all');
   const [licenseFilter, setLicenseFilter] = useState<'all' | 'cc0' | 'attr'>('all');
+  /** Cap pack grid for first paint; "Show more" raises this. */
+  const [packShowLimit, setPackShowLimit] = useState(96);
+  const [pendingExternal, setPendingExternal] = useState<ExternalArtTarget | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{
     x: number;
     y: number;
     icon: LibraryIcon;
   } | null>(null);
+
+  const openPackWebsite = () => {
+    if (shelf === 'bioicons') setPendingExternal(EXTERNAL_ART_SOURCES.bioicons);
+    else if (shelf === 'nih') setPendingExternal(EXTERNAL_ART_SOURCES.nih);
+  };
 
   useEffect(() => {
     if (!ctxMenu) return;
@@ -86,6 +101,18 @@ export function LibraryPanel() {
     void refreshPacks();
   }, [refreshPacks]);
 
+  // Entering a pack shelf: start at category list (not a crowded icon dump).
+  useEffect(() => {
+    if (shelf === 'imports') return;
+    setPackCategory('all');
+    setPackShowLimit(96);
+    setSearch('');
+    const t = window.setTimeout(() => {
+      packBrowserRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 40);
+    return () => window.clearTimeout(t);
+  }, [shelf, setSearch]);
+
   const activePack =
     shelf === 'bioicons' ? bioiconsPack : shelf === 'nih' ? nihPack : null;
 
@@ -95,6 +122,14 @@ export function LibraryPanel() {
   }, [activePack]);
 
   const packCats = useMemo(() => uniqueCategories(packIcons), [packIcons]);
+
+  const packCatCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const icon of packIcons) {
+      map.set(icon.category, (map.get(icon.category) || 0) + 1);
+    }
+    return map;
+  }, [packIcons]);
 
   const packFiltered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -111,6 +146,26 @@ export function LibraryPanel() {
       );
     });
   }, [packIcons, packCategory, licenseFilter, search]);
+
+  /** Category list first; icons only after picking a category (or searching). */
+  const packSearching = search.trim().length > 0;
+  const packInCategory = packCategory !== 'all';
+  const packShowIcons = packInCategory || packSearching;
+
+  const clearPackCategory = () => {
+    setPackCategory('all');
+    setSearch('');
+    setPackShowLimit(96);
+  };
+
+  const togglePackCategory = (cat: string) => {
+    if (packCategory === cat) {
+      clearPackCategory();
+    } else {
+      setPackCategory(cat);
+      setPackShowLimit(96);
+    }
+  };
 
   const mcpIcons = useMemo(() => userLibrary.filter(isMcpIcon), [userLibrary]);
 
@@ -418,6 +473,7 @@ export function LibraryPanel() {
               setShelf(s);
               setPackCategory('all');
               setSearch('');
+              setPackShowLimit(96);
             }}
             onPacksChanged={() => void refreshPacks()}
             onMcpSynced={() => setShelf('imports')}
@@ -523,80 +579,207 @@ export function LibraryPanel() {
           )}
 
           {shelf !== 'imports' && activePack && (
-            <>
-              <div className="ba-pack-credit">
-                {activePack.credit}{' '}
-                <a href={activePack.homepage} target="_blank" rel="noreferrer">
-                  {activePack.homepage}
-                </a>
-              </div>
+            <div
+              className={`ba-pack-browser${packShowIcons ? ' ba-pack-browser--icons' : ''}`}
+              ref={packBrowserRef}
+            >
+              {/* Category list mode: pick a category first — roomy list, no tiny grid */}
+              {!packShowIcons && (
+                <>
+                  <div className="ba-pack-credit ba-pack-credit--compact">
+                    Pick a category to browse icons ·{' '}
+                    <button type="button" className="ba-link-btn" onClick={openPackWebsite}>
+                      {activePack.title} website
+                    </button>
+                  </div>
 
-              <div className="ba-search">
-                <Search size={14} color="#9ca3af" />
-                <input
-                  placeholder={`Search ${activePack.title}…`}
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
-              </div>
+                  <div className="ba-search">
+                    <Search size={14} color="#9ca3af" />
+                    <input
+                      placeholder={`Search all ${activePack.title}…`}
+                      value={search}
+                      onChange={(e) => {
+                        setSearch(e.target.value);
+                        setPackShowLimit(96);
+                      }}
+                    />
+                  </div>
 
-              {shelf === 'bioicons' && (
-                <div className="ba-cats">
-                  <button
-                    className={`ba-chip ${licenseFilter === 'all' ? 'active' : ''}`}
-                    onClick={() => setLicenseFilter('all')}
-                  >
-                    All licenses
-                  </button>
-                  <button
-                    className={`ba-chip ${licenseFilter === 'cc0' ? 'active' : ''}`}
-                    onClick={() => setLicenseFilter('cc0')}
-                  >
-                    CC0 only
-                  </button>
-                  <button
-                    className={`ba-chip ${licenseFilter === 'attr' ? 'active' : ''}`}
-                    onClick={() => setLicenseFilter('attr')}
-                  >
-                    Needs credit
-                  </button>
-                </div>
+                  {shelf === 'bioicons' && (
+                    <div className="ba-cats ba-cats--compact">
+                      <button
+                        type="button"
+                        className={`ba-chip ${licenseFilter === 'all' ? 'active' : ''}`}
+                        onClick={() => setLicenseFilter('all')}
+                      >
+                        All licenses
+                      </button>
+                      <button
+                        type="button"
+                        className={`ba-chip ${licenseFilter === 'cc0' ? 'active' : ''}`}
+                        onClick={() => setLicenseFilter('cc0')}
+                      >
+                        CC0
+                      </button>
+                      <button
+                        type="button"
+                        className={`ba-chip ${licenseFilter === 'attr' ? 'active' : ''}`}
+                        onClick={() => setLicenseFilter('attr')}
+                      >
+                        Needs credit
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="ba-panel-sub" style={{ paddingTop: 0, paddingBottom: 4 }}>
+                    {packCats.length} categories · {packIcons.length.toLocaleString()} icons
+                  </div>
+
+                  <div className="ba-pack-cat-list" role="list">
+                    {packCats.map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        className="ba-pack-cat-item"
+                        role="listitem"
+                        onClick={() => togglePackCategory(c)}
+                      >
+                        <span className="ba-pack-cat-item-name">{c}</span>
+                        <span className="ba-pack-cat-item-count">
+                          {(packCatCounts.get(c) || 0).toLocaleString()}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </>
               )}
 
-              <div className="ba-cats">
-                <button
-                  className={`ba-chip ${packCategory === 'all' ? 'active' : ''}`}
-                  onClick={() => setPackCategory('all')}
-                >
-                  All
-                </button>
-                {packCats.slice(0, 24).map((c) => (
-                  <button
-                    key={c}
-                    className={`ba-chip ${packCategory === c ? 'active' : ''}`}
-                    onClick={() => setPackCategory(c)}
-                  >
-                    {c}
-                  </button>
-                ))}
-              </div>
+              {/* Icon mode: one category (or search) — hide other category names, max space for grid */}
+              {packShowIcons && (
+                <>
+                  <div className="ba-pack-cat-active">
+                    <button
+                      type="button"
+                      className="ba-btn ba-btn-sm"
+                      onClick={clearPackCategory}
+                      title="Back to all categories"
+                    >
+                      ← All categories
+                    </button>
+                    {packInCategory && (
+                      <button
+                        type="button"
+                        className="ba-chip active"
+                        onClick={() => togglePackCategory(packCategory)}
+                        title="Deselect category and show list again"
+                      >
+                        {packCategory} ×
+                      </button>
+                    )}
+                    {packSearching && !packInCategory && (
+                      <span className="ba-pack-cat-search-label">Search results</span>
+                    )}
+                  </div>
 
-              <div className="ba-panel-sub" style={{ paddingTop: 0 }}>
-                Showing {packFiltered.length.toLocaleString()} of{' '}
-                {packIcons.length.toLocaleString()}
-              </div>
+                  <div className="ba-search">
+                    <Search size={14} color="#9ca3af" />
+                    <input
+                      placeholder={
+                        packInCategory
+                          ? `Search in ${packCategory}…`
+                          : `Search ${activePack.title}…`
+                      }
+                      value={search}
+                      onChange={(e) => {
+                        setSearch(e.target.value);
+                        setPackShowLimit(96);
+                      }}
+                    />
+                  </div>
 
-              {renderIconGrid(packFiltered.slice(0, 300), true)}
-              {packFiltered.length > 300 && (
-                <div className="ba-empty">
-                  Showing first 300 matches — refine search or category for more.
-                </div>
+                  {shelf === 'bioicons' && (
+                    <div className="ba-cats ba-cats--compact">
+                      <button
+                        type="button"
+                        className={`ba-chip ${licenseFilter === 'all' ? 'active' : ''}`}
+                        onClick={() => setLicenseFilter('all')}
+                      >
+                        All licenses
+                      </button>
+                      <button
+                        type="button"
+                        className={`ba-chip ${licenseFilter === 'cc0' ? 'active' : ''}`}
+                        onClick={() => setLicenseFilter('cc0')}
+                      >
+                        CC0
+                      </button>
+                      <button
+                        type="button"
+                        className={`ba-chip ${licenseFilter === 'attr' ? 'active' : ''}`}
+                        onClick={() => setLicenseFilter('attr')}
+                      >
+                        Needs credit
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="ba-panel-sub" style={{ paddingTop: 0, paddingBottom: 2 }}>
+                    {Math.min(packShowLimit, packFiltered.length).toLocaleString()} /{' '}
+                    {packFiltered.length.toLocaleString()} icons
+                  </div>
+
+                  <div className="ba-pack-icon-scroll">
+                    {renderIconGrid(packFiltered.slice(0, packShowLimit), true)}
+                    {packFiltered.length > packShowLimit && (
+                      <div style={{ padding: '8px 12px 16px' }}>
+                        <button
+                          type="button"
+                          className="ba-btn ba-btn-sm"
+                          style={{ width: '100%' }}
+                          onClick={() => setPackShowLimit((n) => n + 96)}
+                        >
+                          Show more (
+                          {(packFiltered.length - packShowLimit).toLocaleString()} remaining)
+                        </button>
+                      </div>
+                    )}
+                    {packFiltered.length === 0 && (
+                      <div className="ba-empty">
+                        No icons match.{' '}
+                        <button
+                          type="button"
+                          className="ba-btn ba-btn-sm"
+                          onClick={clearPackCategory}
+                        >
+                          Back to categories
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </>
               )}
-              {packFiltered.length === 0 && (
-                <div className="ba-empty">No icons match this filter.</div>
-              )}
-            </>
+            </div>
           )}
+
+          {shelf !== 'imports' && !activePack && (
+            <div className="ba-empty">
+              Pack data missing in this browser. Re-install the pack, or{' '}
+              <button type="button" className="ba-link-btn" onClick={openPackWebsite}>
+                open the website
+              </button>
+              .
+            </div>
+          )}
+
+          <ExternalArtDialog
+            target={pendingExternal}
+            onCancel={() => setPendingExternal(null)}
+            onApprove={(t) => {
+              setPendingExternal(null);
+              openExternalArtTarget(t);
+              showToast(`Opened ${t.title} — verify license on each icon you use`);
+            }}
+          />
         </>
       )}
 

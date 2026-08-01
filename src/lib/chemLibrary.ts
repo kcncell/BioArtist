@@ -28,7 +28,10 @@ const MAX_RECENT = 24;
 const MAX_SAVED = 80;
 
 export type ChemClipboardPayload = {
-  svg: string;
+  /** ACS / 2D SVG (optional when pasting a 3D PNG snapshot) */
+  svg?: string;
+  /** Transparent PNG of the 3D ball-and-stick view (data URL) */
+  pngDataUrl?: string;
   smiles: string;
   molfile?: string;
   name: string;
@@ -37,25 +40,41 @@ export type ChemClipboardPayload = {
 
 /** Store a structure for paste on the figure canvas (localStorage + optional system clipboard). */
 export async function writeChemClipboard(payload: {
-  svg: string;
+  svg?: string;
+  pngDataUrl?: string;
   smiles: string;
   molfile?: string;
   name?: string;
 }): Promise<{ systemOk: boolean }> {
-  const clean = stripOpaqueBackgroundRects(payload.svg);
+  const clean = payload.svg ? stripOpaqueBackgroundRects(payload.svg) : undefined;
   const data: ChemClipboardPayload = {
     svg: clean,
+    pngDataUrl: payload.pngDataUrl,
     smiles: payload.smiles.trim(),
     molfile: payload.molfile,
     name: payload.name?.trim() || payload.smiles.trim().slice(0, 40) || 'Molecule',
     ts: Date.now(),
   };
+  // Always keep the full payload in memory (includes large PNG) for this tab
+  // and BroadcastChannel consumers. localStorage may drop the PNG due to quota.
   chemClipboardMemory = data;
   try {
     localStorage.setItem(CHEM_CLIPBOARD_KEY, JSON.stringify(data));
     sessionStorage.setItem(CHEM_CLIPBOARD_KEY, JSON.stringify(data));
   } catch {
-    /* quota */
+    /* quota — store slim copy for SMILES fallback only; do NOT wipe memory PNG */
+    try {
+      const slim: ChemClipboardPayload = {
+        ...data,
+        pngDataUrl: undefined,
+      };
+      localStorage.setItem(CHEM_CLIPBOARD_KEY, JSON.stringify(slim));
+      sessionStorage.setItem(CHEM_CLIPBOARD_KEY, JSON.stringify(slim));
+    } catch {
+      /* ignore */
+    }
+    // Restore full payload in memory after any accidental overwrite
+    chemClipboardMemory = data;
   }
   // Notify figure tab that something was copied
   try {
@@ -67,23 +86,28 @@ export async function writeChemClipboard(payload: {
   }
 
   let systemOk = false;
-  // Prefer SMILES as text/plain (small, figure paste understands it) and also put SVG
   try {
     if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
       const parts: Record<string, Blob> = {
-        'text/plain': new Blob([data.smiles || clean], { type: 'text/plain' }),
+        'text/plain': new Blob([data.smiles || clean || data.name], {
+          type: 'text/plain',
+        }),
       };
-      // Some browsers reject image/svg+xml in ClipboardItem — try, fall back
       try {
-        parts['image/svg+xml'] = new Blob([clean], { type: 'image/svg+xml' });
+        if (payload.pngDataUrl?.startsWith('data:image/png')) {
+          const bin = await (await fetch(payload.pngDataUrl)).blob();
+          parts['image/png'] = bin;
+        } else if (clean) {
+          parts['image/svg+xml'] = new Blob([clean], { type: 'image/svg+xml' });
+        }
         await navigator.clipboard.write([new ClipboardItem(parts)]);
         systemOk = true;
       } catch {
-        await navigator.clipboard.writeText(data.smiles || clean);
+        await navigator.clipboard.writeText(data.smiles || clean || data.name);
         systemOk = true;
       }
     } else if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(data.smiles || clean);
+      await navigator.clipboard.writeText(data.smiles || clean || data.name);
       systemOk = true;
     }
   } catch {
@@ -100,16 +124,33 @@ export function seedChemClipboardMemory(payload: ChemClipboardPayload) {
 }
 
 export function readChemClipboard(): ChemClipboardPayload | null {
-  // Prefer freshest: memory vs localStorage
+  // Merge localStorage with memory: never drop an in-memory PNG for a slimmer LS copy.
   try {
     const raw = localStorage.getItem(CHEM_CLIPBOARD_KEY);
     if (raw) {
       const data = JSON.parse(raw) as ChemClipboardPayload;
-      if (data?.svg || data?.smiles) {
-        if (!data.ts || Date.now() - data.ts <= 2 * 60 * 60 * 1000) {
-          if (!chemClipboardMemory || (data.ts || 0) >= (chemClipboardMemory.ts || 0)) {
+      const fresh = data && (!data.ts || Date.now() - data.ts <= 2 * 60 * 60 * 1000);
+      if (fresh && (data.svg || data.pngDataUrl || data.smiles)) {
+        const mem = chemClipboardMemory;
+        if (!mem || (data.ts || 0) > (mem.ts || 0)) {
+          // Newer LS entry — keep PNG from memory if same-ish moment and LS stripped it
+          if (
+            mem?.pngDataUrl &&
+            !data.pngDataUrl &&
+            Math.abs((data.ts || 0) - (mem.ts || 0)) < 2000
+          ) {
+            chemClipboardMemory = { ...data, pngDataUrl: mem.pngDataUrl };
+          } else {
             chemClipboardMemory = data;
           }
+        } else if (
+          mem &&
+          (data.ts || 0) === (mem.ts || 0) &&
+          mem.pngDataUrl &&
+          !data.pngDataUrl
+        ) {
+          // Same timestamp: prefer memory PNG
+          chemClipboardMemory = { ...data, pngDataUrl: mem.pngDataUrl };
         }
       }
     }
@@ -123,7 +164,13 @@ export function readChemClipboard(): ChemClipboardPayload | null {
   ) {
     return null;
   }
-  if (!chemClipboardMemory.svg && !chemClipboardMemory.smiles) return null;
+  if (
+    !chemClipboardMemory.svg &&
+    !chemClipboardMemory.pngDataUrl &&
+    !chemClipboardMemory.smiles
+  ) {
+    return null;
+  }
   return chemClipboardMemory;
 }
 

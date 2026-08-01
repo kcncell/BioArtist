@@ -3,6 +3,7 @@
  * - Structure select by default (click molecule / its interior → whole connected component)
  * - Hover previews the same target that a click would select
  * - ⌘/Ctrl + drag → rectangle marquee **from any tool** (bond/atom/etc.)
+ * - Rectangle (or lasso) select tool → plain left-drag marquee as well as ⌘/Ctrl+drag
  *
  * Ketcher binds mousedown/mousemove/mouseup (not pointer events), so we intercept
  * those in the capture phase with stopImmediatePropagation for the marquee gesture.
@@ -14,8 +15,18 @@ type KetcherLike = any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type EditorLike = any;
 
+type SelectMode = 'fragment' | 'rectangle' | 'lasso' | string;
+
+type LastTool = { name: string; opts?: unknown };
+
 const DRAG_THRESHOLD_PX = 4;
 const BBOX_PAD_MODEL = 0.35;
+
+/** Last select sub-mode per editor (SelectTool keeps mode in a private field). */
+const selectModeByEditor = new WeakMap<object, SelectMode>();
+/** Last tool('name', opts) so we can re-activate after structure mutations. */
+const lastToolByEditor = new WeakMap<object, LastTool>();
+const toolWrappedEditors = new WeakSet<object>();
 
 function isMod(e: MouseEvent | PointerEvent | KeyboardEvent): boolean {
   return !!(e.metaKey || e.ctrlKey);
@@ -32,6 +43,71 @@ function isSelectTool(editor: EditorLike): boolean {
 
 function getEditor(ketcher: KetcherLike): EditorLike | null {
   return ketcher?.editor ?? null;
+}
+
+/**
+ * Wrap editor.tool so we know:
+ * - fragment vs rectangle/lasso select mode
+ * - the last active tool (eraser, bond, select-rectangle, …) for re-activation after add
+ *
+ * Must run before the user can switch tools (see bindEditor / activateStructureSelect).
+ */
+function ensureSelectModeTracking(editor: EditorLike): void {
+  if (!editor || typeof editor.tool !== 'function' || toolWrappedEditors.has(editor)) return;
+  toolWrappedEditors.add(editor);
+  const orig = editor.tool.bind(editor);
+  editor.tool = function trackedTool(name?: unknown, opts?: unknown) {
+    if (arguments.length === 0) {
+      return orig();
+    }
+    if (typeof name === 'string') {
+      lastToolByEditor.set(editor, { name, opts });
+      if (name === 'select') {
+        const mode = typeof opts === 'string' ? opts : 'fragment';
+        selectModeByEditor.set(editor, mode);
+      }
+    }
+    return orig(name, opts);
+  };
+}
+
+function getSelectMode(editor: EditorLike): SelectMode | null {
+  try {
+    ensureSelectModeTracking(editor);
+    if (selectModeByEditor.has(editor)) {
+      return selectModeByEditor.get(editor) ?? null;
+    }
+    // Public mode on some tool variants (e.g. view-only)
+    const t = editor.tool?.();
+    if (t && typeof t.mode === 'string') return t.mode as SelectMode;
+    if (t?.lassoHelper && typeof t.lassoHelper.fragment === 'boolean') {
+      return t.lassoHelper.fragment ? 'fragment' : 'rectangle';
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/** Rectangle or freeform lasso: plain drag should marquee without ⌘/Ctrl. */
+function isAreaSelectMode(editor: EditorLike): boolean {
+  if (!isSelectTool(editor)) return false;
+  const mode = getSelectMode(editor);
+  return mode === 'rectangle' || mode === 'lasso';
+}
+
+/** True when pointer is over a drawable structure item (not blank canvas). */
+function hitStructureItem(editor: EditorLike, event: MouseEvent): boolean {
+  try {
+    const hit = editor.findItem?.(
+      event,
+      ['atoms', 'bonds', 'frags', 'sgroups', 'functionalGroups', 'rgroups', 'texts', 'rxnArrows', 'rxnPluses'],
+      null,
+    );
+    return !!hit;
+  } catch {
+    return false;
+  }
 }
 
 /** Connected-component (fragment) id for an atom or bond hit. */
@@ -196,20 +272,43 @@ export function activateStructureSelect(ketcher: KetcherLike): void {
   try {
     const editor = getEditor(ketcher);
     if (!editor || typeof editor.tool !== 'function') return;
+    ensureSelectModeTracking(editor);
     editor.tool('select', 'fragment');
   } catch (err) {
     console.warn('[ChemStudio] activateStructureSelect failed', err);
   }
 }
 
+/**
+ * Re-activate whatever tool the user last chose (rectangle, eraser, bond, …).
+ * Use after adding structures so toolbar selection stays effective without re-clicking.
+ */
+export function reassertLastTool(ketcher: KetcherLike): void {
+  try {
+    const editor = getEditor(ketcher);
+    if (!editor || typeof editor.tool !== 'function') return;
+    ensureSelectModeTracking(editor);
+    const last = lastToolByEditor.get(editor);
+    if (!last?.name) return;
+    editor.tool(last.name, last.opts);
+  } catch (err) {
+    console.warn('[ChemStudio] reassertLastTool failed', err);
+  }
+}
+
 export type SelectionEnhanceHandle = {
   reassertDefaultTool: () => void;
+  /** Re-apply the tool currently shown in the toolbar (not forced structure-select). */
+  reassertLastTool: () => void;
+  /** Call as soon as Ketcher is ready so tool('select', mode) is tracked. */
+  bindEditor: (ketcher: KetcherLike) => void;
   dispose: () => void;
 };
 
 /**
- * Install hover preview, structure-click, and ⌘/Ctrl marquee on the Ketcher host root.
- * Marquee works from **any** active tool.
+ * Install hover preview, structure-click, and marquee on the Ketcher host root.
+ * - ⌘/Ctrl+drag marquee works from **any** active tool
+ * - With Rectangle (or Lasso) select active, plain left-drag also marquees (blank canvas)
  */
 export function installKetcherSelectionEnhance(
   root: HTMLElement,
@@ -223,11 +322,50 @@ export function installKetcherSelectionEnhance(
     model0: { x: number; y: number };
     active: boolean;
     additive: boolean;
+    /** true when gesture started with ⌘/Ctrl (any tool) */
+    fromMod: boolean;
   } | null = null;
+
+  const bindEditor = (ketcher: KetcherLike) => {
+    const editor = getEditor(ketcher);
+    if (editor) ensureSelectModeTracking(editor);
+  };
 
   const reassertDefaultTool = () => {
     const k = getKetcher();
     if (k) activateStructureSelect(k);
+  };
+
+  const reassertLastToolHandle = () => {
+    const k = getKetcher();
+    if (k) reassertLastTool(k);
+  };
+
+  const beginMarquee = (e: MouseEvent, editor: EditorLike, fromMod: boolean) => {
+    killEvent(e);
+    try {
+      const model0 = CoordinateTransformation.pageToModel(e, editor.render);
+      marqueeEl = ensureMarqueeEl();
+      marquee = {
+        clientX0: e.clientX,
+        clientY0: e.clientY,
+        model0: { x: model0.x, y: model0.y },
+        active: false,
+        additive: e.shiftKey,
+        fromMod,
+      };
+      document.body.classList.add('ba-ketcher-marquee-active');
+      try {
+        editor.hover?.(null);
+      } catch {
+        /* */
+      }
+      lastHoverFrag = null;
+    } catch (err) {
+      console.warn('[ChemStudio] marquee start failed', err);
+      marquee = null;
+      document.body.classList.remove('ba-ketcher-marquee-active');
+    }
   };
 
   const endMarquee = (event: MouseEvent | null, commit: boolean) => {
@@ -241,9 +379,18 @@ export function installKetcherSelectionEnhance(
     if (!commit || !editor || !event) return;
 
     if (!state.active) {
-      // ⌘+click without drag: select structure under cursor if any
-      const fragId = resolveFragmentUnderPointer(editor, event);
-      if (fragId != null) selectFragment(editor, fragId);
+      // Click without drag
+      if (state.fromMod) {
+        const fragId = resolveFragmentUnderPointer(editor, event);
+        if (fragId != null) selectFragment(editor, fragId);
+      } else if (!state.additive) {
+        // Rectangle/lasso blank click: clear selection (native Ketcher behavior)
+        try {
+          editor.selection(null);
+        } catch {
+          /* ignore */
+        }
+      }
       return;
     }
 
@@ -264,45 +411,37 @@ export function installKetcherSelectionEnhance(
   };
 
   /**
-   * ⌘/Ctrl + mousedown → start marquee from **any** tool.
-   * Must use mouse events (Ketcher does) and capture + stopImmediatePropagation
-   * so bond/atom tools never receive the gesture.
+   * Start marquee when:
+   * - ⌘/Ctrl + mousedown from **any** tool, or
+   * - plain mousedown on blank canvas while Rectangle/Lasso select is active
+   *
+   * Capture + stopImmediatePropagation so bond/atom tools never receive the gesture.
    */
   const onMouseDownCapture = (e: MouseEvent) => {
     if (e.button !== 0) return;
-    if (!isMod(e)) return;
 
-    const editor = getEditor(getKetcher());
+    const ketcher = getKetcher();
+    const editor = getEditor(ketcher);
     if (!editor?.render) return;
+    ensureSelectModeTracking(editor);
 
     // Only when the event is inside our Ketcher host (root or a descendant)
     const target = e.target as Node | null;
     if (!target || !root.contains(target)) return;
 
-    killEvent(e);
-
-    try {
-      const model0 = CoordinateTransformation.pageToModel(e, editor.render);
-      marqueeEl = ensureMarqueeEl();
-      marquee = {
-        clientX0: e.clientX,
-        clientY0: e.clientY,
-        model0: { x: model0.x, y: model0.y },
-        active: false,
-        additive: e.shiftKey,
-      };
-      document.body.classList.add('ba-ketcher-marquee-active');
-      try {
-        editor.hover?.(null);
-      } catch {
-        /* */
-      }
-      lastHoverFrag = null;
-    } catch (err) {
-      console.warn('[ChemStudio] marquee start failed', err);
-      marquee = null;
-      document.body.classList.remove('ba-ketcher-marquee-active');
+    const mod = isMod(e);
+    if (mod) {
+      // ⌘/Ctrl+drag marquee regardless of active tool
+      beginMarquee(e, editor, true);
+      return;
     }
+
+    // Plain left-drag marquee only in rectangle/lasso select mode, and only on blank
+    // (on structure: keep click-to-select / structure-move).
+    if (!isAreaSelectMode(editor)) return;
+    if (hitStructureItem(editor, e)) return;
+
+    beginMarquee(e, editor, false);
   };
 
   const onMouseMoveCapture = (e: MouseEvent) => {
@@ -320,11 +459,12 @@ export function installKetcherSelectionEnhance(
       return;
     }
 
-    // Hover preview only while a select tool is active (don't fight bond tools)
+    // Hover preview only in structure-select (fragment) mode — not while area-selecting
     if (e.buttons !== 0) return;
     const editor = getEditor(getKetcher());
     if (!editor) return;
-    if (!isSelectTool(editor)) {
+    ensureSelectModeTracking(editor);
+    if (!isSelectTool(editor) || isAreaSelectMode(editor)) {
       if (lastHoverFrag != null) {
         hoverFragment(editor, null);
         lastHoverFrag = null;
@@ -352,10 +492,12 @@ export function installKetcherSelectionEnhance(
   };
 
   const onMouseDownBubble = (e: MouseEvent) => {
-    // Structure-click enhance: only when select tool is active and not ⌘-marquee
+    // Structure-click enhance: fragment select mode only (not rectangle marquee tool)
     if (e.button !== 0 || isMod(e)) return;
     const editor = getEditor(getKetcher());
     if (!editor || !isSelectTool(editor)) return;
+    ensureSelectModeTracking(editor);
+    if (isAreaSelectMode(editor)) return;
 
     try {
       const near = editor.findItem?.(
@@ -406,7 +548,7 @@ export function installKetcherSelectionEnhance(
   };
 
   // Capture on window so we always win over Ketcher's clientArea/document listeners
-  // for the ⌘/Ctrl marquee gesture, regardless of active tool.
+  // for the marquee gesture, regardless of active tool (⌘ path) or in area-select mode.
   window.addEventListener('mousedown', onMouseDownCapture, true);
   window.addEventListener('mousemove', onMouseMoveCapture, true);
   window.addEventListener('mouseup', onMouseUpCapture, true);
@@ -415,8 +557,18 @@ export function installKetcherSelectionEnhance(
   window.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('blur', onBlur);
 
+  // If ketcher already exists, start tracking immediately
+  try {
+    const ed = getEditor(getKetcher());
+    if (ed) ensureSelectModeTracking(ed);
+  } catch {
+    /* ignore */
+  }
+
   return {
     reassertDefaultTool,
+    reassertLastTool: reassertLastToolHandle,
+    bindEditor,
     dispose: () => {
       endMarquee(null, false);
       window.removeEventListener('mousedown', onMouseDownCapture, true);

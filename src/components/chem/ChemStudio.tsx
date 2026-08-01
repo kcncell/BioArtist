@@ -10,6 +10,7 @@ import {
   FlaskConical,
   Loader2,
   MoreVertical,
+  RotateCcw,
   Save,
   Send,
   Star,
@@ -44,6 +45,7 @@ import {
   type ChemFavDragPayload,
   type KetcherApi,
 } from './KetcherHost';
+import { Mol3DViewer, type Mol3DViewerHandle } from './Mol3DViewer';
 
 const KetcherEditor = lazy(() =>
   import('./KetcherHost')
@@ -77,7 +79,7 @@ const STYLES: { id: ChemStyle; label: string; hint: string }[] = [
   {
     id: 'ballstick',
     label: 'CPK ball & stick',
-    hint: 'CPK-colored atoms + half-colored sticks · click again → ACS',
+    hint: '3D interactive · CPK colors · rotate & export · click again → ACS',
   },
 ];
 
@@ -96,10 +98,11 @@ export function ChemStudio() {
   const [ketcherOk, setKetcherOk] = useState(true);
   const [ctxMenu, setCtxMenu] = useState<ChemCtxMenuState | null>(null);
   const [favMenu, setFavMenu] = useState<ChemFavMenuState | null>(null);
-  /** Zoom for ball-and-stick canvas. 1 = fit. */
+  /** Zoom for ball-and-stick canvas. 1 = fit (legacy 2D SVG; 3D uses native zoom). */
   const [viewZoom, setViewZoom] = useState(1);
   const [favorites, setFavorites] = useState<ChemStructure[]>([]);
   const ketcherRef = useRef<KetcherApi | null>(null);
+  const mol3dRef = useRef<Mol3DViewerHandle | null>(null);
   /** Skip the synthetic click that browsers fire after a drag. */
   const favDraggedRef = useRef(false);
 
@@ -117,15 +120,16 @@ export function ChemStudio() {
     return subscribeChemLibrary(refreshFavorites);
   }, [refreshFavorites]);
 
-  /** Full-size SVG for the main Chem Studio canvas (not just the side preview). */
+  /** Optional 2D SVG fallback / ACS export asset while 3D is primary for ballstick. */
   const [canvasSvg, setCanvasSvg] = useState<string | null>(null);
+  /** Structure string fed to 3D viewer (SMILES preferred). */
+  const [mol3dInput, setMol3dInput] = useState('');
 
-  /** Apply display style: re-read sketcher, re-render main canvas + preview. */
+  /** Apply display style: re-read sketcher; 3D ballstick vs 2D ACS editor. */
   const applyStyle = useCallback(
     async (next: ChemStyle, opts?: { fromToggle?: boolean }) => {
       setBusy(true);
       try {
-        await getRDKit();
         let s = smiles.trim();
         if (ketcherRef.current) {
           try {
@@ -139,32 +143,36 @@ export function ChemStudio() {
         if (!s) {
           setStyle(next);
           setCanvasSvg(null);
+          setMol3dInput('');
           setStatus(
             next === '2d'
               ? '2D ACS mode — draw in the sketcher; exports use ACS skeleton'
-              : 'CPK ball & stick — draw a structure first (switch to 2D ACS to edit)',
+              : 'CPK ball & stick (3D) — draw a structure first (switch to 2D ACS to edit)',
           );
           return;
         }
-        const large =
-          next === '2d'
-            ? null
-            : await renderChemStyle(s, next, { width: 720, height: 560 });
         setStyle(next);
-        setCanvasSvg(large);
         if (next === '2d') {
+          setCanvasSvg(null);
+          setMol3dInput('');
           ketcherRef.current?.setSelectStructure();
+          setStatus(
+            '2D ACS — hover/click structure · ⌘/Ctrl+drag marquee (any tool) · Rectangle tool: plain drag marquee too'
+          );
+        } else {
+          setMol3dInput(s);
+          // Keep a 2D ACS SVG as non-3D fallback for thumbs / ACS export if needed
+          try {
+            await getRDKit();
+            const acs = await renderChemStyle(s, '2d', { width: 280, height: 220 });
+            setCanvasSvg(acs);
+          } catch {
+            setCanvasSvg(null);
+          }
+          setStatus(
+            '3D CPK ball & stick — drag to rotate · scroll to zoom · Copy for figure exports transparent PNG',
+          );
         }
-        const labels: Record<string, string> = {
-          '2d': '2D ACS — hover/click structure to select · ⌘/Ctrl+drag for marquee · toolbar for bonds',
-          ballstick:
-            'CPK ball & stick — gray C, red O, blue N… (click again or 2D ACS to edit)',
-        };
-        setStatus(
-          next === '2d' || large
-            ? labels[next] || labels['2d']
-            : 'Could not render ball & stick for this structure',
-        );
         void opts;
       } finally {
         setBusy(false);
@@ -173,33 +181,14 @@ export function ChemStudio() {
     [smiles],
   );
 
-  // Live re-render ball-and-stick canvas when SMILES / style change
+  // When SMILES changes while in ballstick mode, refresh 3D input
   useEffect(() => {
-    let cancelled = false;
-    const t = window.setTimeout(() => {
-      void (async () => {
-        if (!smiles.trim() || style === '2d') {
-          if (!cancelled && style === '2d') setCanvasSvg(null);
-          if (!cancelled && !smiles.trim()) setCanvasSvg(null);
-          return;
-        }
-        setBusy(true);
-        try {
-          await getRDKit();
-          const large = await renderChemStyle(smiles, 'ballstick', {
-            width: 720,
-            height: 560,
-          });
-          if (!cancelled) setCanvasSvg(large);
-        } finally {
-          if (!cancelled) setBusy(false);
-        }
-      })();
-    }, 220);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(t);
-    };
+    if (style !== '2d' && smiles.trim()) {
+      setMol3dInput(smiles.trim());
+    }
+    if (style === '2d' || !smiles.trim()) {
+      if (style === '2d') setMol3dInput('');
+    }
   }, [smiles, style]);
 
   const onStyleClick = (id: ChemStyle) => {
@@ -211,15 +200,6 @@ export function ChemStudio() {
     }
     if (id !== style) setViewZoom(1);
     void applyStyle(id === 'cpk' || id === 'wire' ? 'ballstick' : id);
-  };
-
-  /** ⌘/Ctrl + mouse wheel zoom on styled canvas */
-  const onStyleCanvasWheel = (e: React.WheelEvent) => {
-    if (!(e.ctrlKey || e.metaKey)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const delta = e.deltaY > 0 ? -0.08 : 0.08;
-    setViewZoom((z) => Math.min(4, Math.max(0.35, Number((z + delta).toFixed(3)))));
   };
 
   /** Read current structure from Ketcher (or SMILES field). */
@@ -262,34 +242,85 @@ export function ChemStudio() {
   const addCurrentToFavorites = useCallback(async () => {
     setBusy(true);
     try {
-      const { smiles: s, molfile } = await readStructure();
+      // Prefer the *selection* when present so multi-structure canvases
+      // only favorite the molecule that was right-clicked / selected.
+      let s = '';
+      let molfile: string | undefined;
+      let selectedOnly = false;
+
+      if (ketcherRef.current?.getSelectedOrFullStructure) {
+        try {
+          const exp = await ketcherRef.current.getSelectedOrFullStructure();
+          s = (exp.smiles || '').trim();
+          molfile = exp.molfile;
+          selectedOnly = exp.selectedOnly;
+        } catch {
+          /* fall through */
+        }
+      }
       if (!s) {
-        setStatus('Nothing to favorite — draw a structure first');
+        const full = await readStructure();
+        s = full.smiles;
+        molfile = full.molfile;
+        selectedOnly = false;
+      }
+
+      if (!s) {
+        setStatus('Nothing to favorite — select a structure (or draw one first)');
         return;
       }
+
+      // Thumbnails always use ACS 2D for clarity
       const svg =
-        (await renderChemStyle(s, style === 'ballstick' ? 'ballstick' : '2d', {
-          width: 200,
-          height: 160,
-        })) || (await buildSvg(s));
+        (await renderChemStyle(s, '2d', { width: 200, height: 160 })) ||
+        (await buildSvg(s));
       if (!svg) {
-        setStatus('Could not save favorite');
+        // Try molfile path
+        const fromMol =
+          molfile &&
+          ((await renderChemStyle(molfile, '2d', { width: 200, height: 160 })) ||
+            (await smilesToSvg(molfile, { width: 200, height: 160, acs: true, transparent: true })));
+        if (!fromMol) {
+          setStatus('Could not save favorite');
+          return;
+        }
+        const label = name.trim() || s.slice(0, 32);
+        upsertChemStructure({
+          name: label,
+          smiles: s,
+          svg: fromMol,
+          source: 'favorite',
+          style: '2d',
+          molfile,
+        });
+        refreshFavorites();
+        setStatus(
+          selectedOnly
+            ? `Added selected structure “${label.slice(0, 24)}” to favorites`
+            : `Added “${label.slice(0, 24)}” to favorites`,
+        );
         return;
       }
+
+      const label = name.trim() || s.slice(0, 32);
       upsertChemStructure({
-        name: name.trim() || s.slice(0, 32),
+        name: label,
         smiles: s,
         svg,
         source: 'favorite',
-        style: style === 'ballstick' ? 'ballstick' : '2d',
+        style: '2d',
         molfile,
       });
       refreshFavorites();
-      setStatus(`Added “${name.trim() || s.slice(0, 24)}” to favorites`);
+      setStatus(
+        selectedOnly
+          ? `Added selected structure “${label.slice(0, 24)}” to favorites`
+          : `Added “${label.slice(0, 24)}” to favorites (entire canvas — select one molecule to favorite only that)`,
+      );
     } finally {
       setBusy(false);
     }
-  }, [buildSvg, name, readStructure, refreshFavorites, style]);
+  }, [buildSvg, name, readStructure, refreshFavorites]);
 
   /**
    * Add a favorite onto the sketcher without clearing existing drawing.
@@ -550,25 +581,81 @@ export function ChemStudio() {
     }
   }, []);
 
+  /**
+   * Capture the *current* 3D camera as transparent PNG for BioArtist.
+   * Must run before any setState that re-renders the page (which used to remount the viewer).
+   */
+  const captureCurrent3dView = useCallback((): string | null => {
+    if (style !== 'ballstick') return null;
+    const v = mol3dRef.current;
+    if (!v?.isReady?.()) return null;
+    return v.capturePng();
+  }, [style]);
+
+  /** Stable callbacks so Mol3DViewer does not rebuild the model on every parent render. */
+  const onMol3dReady = useCallback(
+    ({ is3d, source }: { is3d: boolean; source: string }) => {
+      setStatus(
+        is3d
+          ? `3D CPK ball & stick ready (${source}) — drag to rotate · “Copy this 3D view” exports the exact camera`
+          : `Showing structure without full 3D embed (${source}) — try a common molecule for PubChem 3D`,
+      );
+    },
+    [],
+  );
+  const onMol3dError = useCallback((msg: string) => {
+    setStatus(msg);
+  }, []);
+
   /** Core: copy structure so figure canvas can paste it. */
   const copyForFigure = useCallback(async (): Promise<boolean> => {
+    // 3D: snapshot the camera FIRST, before any React state update remounts the viewer
+    let png3d: string | null = null;
+    if (style === 'ballstick') {
+      await new Promise<void>((r) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => r()));
+      });
+      png3d = captureCurrent3dView();
+    }
+
     setBusy(true);
     try {
       const { smiles: s, molfile } = await readStructure();
-      if (!s && !molfile) {
+      if (!s && !molfile && !png3d) {
         setStatus('Nothing to copy — draw a structure first');
         return false;
       }
-      // Prefer SMILES for RDKit draw; fall back to molfile as input
+      // Only update SMILES field if it changed — avoids useless re-renders
+      if (s && s !== smiles) setSmiles(s);
+
+      if (style === 'ballstick') {
+        if (png3d) {
+          const { systemOk } = await writeChemClipboard({
+            pngDataUrl: png3d,
+            smiles: s || '',
+            molfile,
+            name: name.trim() || s.slice(0, 32) || 'Molecule',
+          });
+          setStatus(
+            systemOk
+              ? 'Copied this 3D view (transparent) — switch to BioArtist and Paste (⌘V)'
+              : 'Copied this 3D view via Chem bridge — Paste on BioArtist canvas',
+          );
+          return true;
+        }
+        setStatus(
+          'Could not capture 3D view — wait until the model finishes loading, then try again',
+        );
+        return false;
+      }
+
+      // 2D ACS path
       const drawInput = s || molfile || '';
       const svg = await buildSvg(drawInput);
       if (!svg) {
-        // molfile path: RDKit get_mol accepts molfile too via drawInput
         setStatus('Could not draw structure for copy');
         return false;
       }
-      if (s) setSmiles(s);
-      if (style === 'ballstick') setCanvasSvg(svg);
       const { systemOk } = await writeChemClipboard({
         svg,
         smiles: s || '',
@@ -588,7 +675,7 @@ export function ChemStudio() {
     } finally {
       setBusy(false);
     }
-  }, [buildSvg, name, readStructure, style]);
+  }, [buildSvg, captureCurrent3dView, name, readStructure, smiles, style]);
 
   const cutForFigure = useCallback(async () => {
     const ok = await copyForFigure();
@@ -713,9 +800,14 @@ export function ChemStudio() {
         }
       }
       setFavMenu(null);
-      setCtxMenu({ x: e.clientX, y: e.clientY, hasStructure });
+      setCtxMenu({
+        x: e.clientX,
+        y: e.clientY,
+        hasStructure,
+        is3dView: style === 'ballstick',
+      });
     },
-    [canvasSvg, smiles],
+    [canvasSvg, smiles, style],
   );
 
   // Keyboard shortcuts while Chem Studio is focused
@@ -750,18 +842,48 @@ export function ChemStudio() {
       }
     };
 
-    // After ANY copy in Chem Studio (including Ketcher’s own), also fill the figure bridge
+    // After system copy (incl. right-click / ⌘C), keep the Chem bridge filled.
+    // In ball-and-stick mode always capture the *current* 3D view — never overwrite
+    // with a default ACS 2D redraw.
     const onCopy = () => {
-      // Defer so Ketcher finishes its own clipboard write first, then we enrich the bridge
       window.setTimeout(() => {
         void (async () => {
           try {
+            if (style === 'ballstick') {
+              // Capture immediately — do not await network/smiles first (avoids remount race)
+              await new Promise<void>((r) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => r()));
+              });
+              const png = captureCurrent3dView();
+              if (png) {
+                let s = smiles.trim();
+                let molfile: string | undefined;
+                try {
+                  if (ketcherRef.current) {
+                    s = (await ketcherRef.current.getSmiles()).trim() || s;
+                    molfile = await ketcherRef.current.getMolfile();
+                  }
+                } catch {
+                  /* optional */
+                }
+                await writeChemClipboard({
+                  pngDataUrl: png,
+                  smiles: s,
+                  molfile,
+                  name: name.trim() || s.slice(0, 32) || 'Molecule',
+                });
+                setStatus(
+                  'Copied this 3D view (transparent) — switch to BioArtist and Paste (⌘V)',
+                );
+              }
+              return;
+            }
+
             if (!ketcherRef.current) return;
             const s = (await ketcherRef.current.getSmiles()).trim();
             if (!s) return;
-            // Avoid double-work if we just copied via copyForFigure
             const svg =
-              (await renderChemStyle(s, style)) ||
+              (await renderChemStyle(s, '2d')) ||
               (await smilesToSvg(s, {
                 width: 280,
                 height: 220,
@@ -782,7 +904,6 @@ export function ChemStudio() {
               name: name.trim() || s.slice(0, 32),
             });
             setSmiles(s);
-            if (style === 'ballstick') setCanvasSvg(svg);
             setStatus(
               'Structure ready for BioArtist — switch tabs and Paste (⌘V) on the canvas',
             );
@@ -799,7 +920,7 @@ export function ChemStudio() {
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('copy', onCopy, true);
     };
-  }, [copyForFigure, cutForFigure, downloadSvg, name, style]);
+  }, [captureCurrent3dView, copyForFigure, cutForFigure, downloadSvg, name, smiles, style]);
 
   const backToFigure = () => {
     window.location.href = '/';
@@ -868,7 +989,7 @@ export function ChemStudio() {
         <section className="ba-chem-studio-editor">
           <div className="ba-chem-studio-section-label">
             {style === '2d'
-              ? '2D ACS · ⌘/Ctrl+drag marquee (any tool) · hover/click structure · right-click → Copy for figure'
+              ? '2D ACS · ⌘/Ctrl+drag marquee (any tool) · Rectangle tool: plain drag · right-click → Copy for figure'
               : `Viewing ${
                   style === 'ballstick'
                     ? 'ball & stick'
@@ -878,7 +999,7 @@ export function ChemStudio() {
                 } · switch to 2D ACS to edit bonds`}
           </div>
 
-          {/* Styled main canvas — shown for ballstick / cpk / wire */}
+          {/* 3D CPK ball-and-stick (MolView-style) — shown when not in 2D ACS */}
           {style !== '2d' && (
             <div
               className="ba-chem-style-canvas"
@@ -886,15 +1007,10 @@ export function ChemStudio() {
                 e.preventDefault();
                 void openCtx(e.nativeEvent);
               }}
-              onWheel={onStyleCanvasWheel}
             >
               <div className="ba-chem-style-canvas-toolbar">
                 <span className="ba-chem-style-canvas-badge">
-                  {style === 'ballstick'
-                    ? 'Ball & stick (CPK colors)'
-                    : style === 'cpk'
-                      ? 'CPK space-fill'
-                      : 'CPK wireframe'}
+                  3D ball &amp; stick · CPK (Jmol) colors
                 </span>
                 <button
                   type="button"
@@ -902,7 +1018,6 @@ export function ChemStudio() {
                   onClick={() => {
                     setViewZoom(1);
                     void applyStyle('2d');
-                    // When returning to edit mode, restore structure-select as default
                     queueMicrotask(() => ketcherRef.current?.setSelectStructure());
                   }}
                 >
@@ -911,55 +1026,34 @@ export function ChemStudio() {
                 <button
                   type="button"
                   className="ba-btn ba-btn-sm"
-                  disabled={busy}
-                  onClick={() => void copyForFigure()}
+                  title="Copy the current rotated 3D view as a transparent PNG for BioArtist"
+                  onClick={() => {
+                    void copyForFigure();
+                  }}
                 >
-                  <ClipboardCopy size={14} /> Copy for figure
+                  <ClipboardCopy size={14} /> Copy this 3D view for figure
                 </button>
-                <div className="ba-chem-zoom-controls" title="⌘/Ctrl + scroll to zoom">
-                  <button
-                    type="button"
-                    className="ba-btn ba-btn-sm ba-btn-icon"
-                    onClick={() => setViewZoom((z) => Math.max(0.35, Number((z - 0.15).toFixed(2))))}
-                    aria-label="Zoom out"
-                  >
-                    −
-                  </button>
-                  <span className="ba-chem-zoom-label">{Math.round(viewZoom * 100)}%</span>
-                  <button
-                    type="button"
-                    className="ba-btn ba-btn-sm ba-btn-icon"
-                    onClick={() => setViewZoom((z) => Math.min(4, Number((z + 0.15).toFixed(2))))}
-                    aria-label="Zoom in"
-                  >
-                    +
-                  </button>
-                  <button
-                    type="button"
-                    className="ba-btn ba-btn-sm"
-                    onClick={() => setViewZoom(1)}
-                    title="Reset zoom"
-                  >
-                    Fit
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  className="ba-btn ba-btn-sm"
+                  title="Reset camera to the initial fit after the model loaded"
+                  onClick={() => {
+                    mol3dRef.current?.resetView();
+                    setStatus('3D view reset to initial orientation');
+                  }}
+                >
+                  <RotateCcw size={14} /> Reset view
+                </button>
               </div>
-              <div className="ba-chem-style-canvas-stage">
-                {busy && (
-                  <span className="ba-chem-preview-busy">
-                    <Loader2 size={18} className="ba-spin" /> Rendering style…
-                  </span>
-                )}
-                {!busy && canvasSvg && (
-                  <img
-                    className="ba-chem-style-canvas-img"
-                    src={chemSvgToDataUrl(canvasSvg)}
-                    alt={`${style} structure`}
-                    draggable={false}
-                    style={{ transform: `scale(${viewZoom})` }}
+              <div className="ba-chem-style-canvas-stage ba-chem-style-canvas-stage--3d">
+                {mol3dInput ? (
+                  <Mol3DViewer
+                    ref={mol3dRef}
+                    structure={mol3dInput}
+                    onReady={onMol3dReady}
+                    onError={onMol3dError}
                   />
-                )}
-                {!busy && !canvasSvg && (
+                ) : (
                   <div className="ba-chem-studio-fallback">
                     <p>No structure to display. Switch to 2D ACS and draw a molecule.</p>
                     <button
@@ -972,7 +1066,10 @@ export function ChemStudio() {
                   </div>
                 )}
               </div>
-              <div className="ba-chem-zoom-hint">⌘/Ctrl + mouse wheel to zoom · − / + / Fit in toolbar</div>
+              <div className="ba-chem-zoom-hint">
+                Drag to rotate · scroll to zoom · right-drag to pan · transparent PNG export for
+                BioArtist
+              </div>
             </div>
           )}
 
@@ -1010,10 +1107,10 @@ export function ChemStudio() {
                   }}
                   onReady={(api) => {
                     ketcherRef.current = api;
-                    // Default: structure select + hover; marquee = ⌘/Ctrl+drag
+                    // Default: structure select + hover; marquee = ⌘/Ctrl+drag (any tool); Rectangle tool also plain drag
                     api.setSelectStructure();
                     setStatus(
-                      'Ketcher ready — click structure to select · drag to move (snaps) · Hand pans view · favorites add beside · ⌘/Ctrl+drag marquee',
+                      'Ketcher ready — click structure to select · drag to move (snaps) · ⌘/Ctrl+drag marquee any tool · Rectangle tool: plain drag marquee',
                     );
                   }}
                   onError={() => {
@@ -1066,32 +1163,10 @@ export function ChemStudio() {
             >
               <ArrowRight size={14} /> Reaction arrow + reagents
             </button>
-            <button
-              type="button"
-              className="ba-btn ba-btn-sm"
-              style={{ width: '100%', justifyContent: 'center' }}
-              disabled={busy || !ketcherOk || style !== '2d'}
-              title="Select a reaction arrow on the canvas first, then add top/bottom labels"
-              onClick={() => {
-                const api = ketcherRef.current;
-                if (!api) {
-                  setStatus('Sketcher not ready yet');
-                  return;
-                }
-                const r = api.addReagentsToSelectedArrow();
-                setStatus(
-                  r.ok
-                    ? 'Reagent labels added above/below the selected arrow'
-                    : r.error || 'Select a reaction arrow first',
-                );
-              }}
-            >
-              <FlaskConical size={14} /> Labels on selected arrow
-            </button>
             <p className="ba-chem-studio-style-note" style={{ margin: '0' }}>
-              Labels sit centered above &amp; below the arrow. Double-click to edit text; select a
-              label alone and press Delete to remove it. Build reactants/products with the bond
-              tools, then <strong>Copy for figure</strong> / Send to BioArtist.
+              Places a long reaction arrow with <strong>reagent</strong> and{' '}
+              <strong>condition</strong> centered above and below. Double-click a label to edit;
+              select a label alone and press Delete to remove it.
             </p>
           </div>
 
@@ -1112,8 +1187,10 @@ export function ChemStudio() {
             ))}
           </div>
           <p className="ba-chem-studio-style-note">
-            <strong>2D ACS</strong> = draw/edit. <strong>CPK ball &amp; stick</strong> = colored
-            spheres + sticks on the main canvas (click again to edit).
+            <strong>2D ACS</strong> = draw/edit bonds. <strong>CPK ball &amp; stick</strong> = 3D
+            MolView-style 3D viewer — rotate freely, then “Copy this 3D view for figure” (or
+            right-click → copy) exports that exact camera as a transparent PNG. Click the active
+            style again to return to 2D ACS.
           </p>
 
           <div className="ba-chem-studio-section-label">Current SMILES</div>
