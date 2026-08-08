@@ -11,15 +11,21 @@ import {
   loadFavoritesDockOpen,
   loadGlassHue,
   loadGlassOpacity,
+  loadLeftPanelOpen,
+  loadLeftPanelWidth,
   loadPinnedIconIds,
   loadPinnedTemplateIds,
+  loadRightPanelOpen,
   loadThemeMode,
   saveFavorites,
   saveFavoritesDockOpen,
   saveGlassHue,
   saveGlassOpacity,
+  saveLeftPanelOpen,
+  saveLeftPanelWidth,
   savePinnedIconIds,
   savePinnedTemplateIds,
+  saveRightPanelOpen,
   saveThemeMode,
 } from '../lib/storage';
 import { applyGlassTheme } from '../lib/glassTheme';
@@ -27,6 +33,7 @@ import type {
   AppState,
   LayerInfo,
   LibraryTab,
+  OpenDocument,
   SelectionProps,
   ShapeKind,
   ToolId,
@@ -44,6 +51,14 @@ export interface AppActions {
     opts?: { stayOnTool?: boolean },
   ) => Promise<boolean>;
   removeUserIcon: (id: string) => void;
+  /** Replace full user library (persist). */
+  setUserLibrary: (icons: LibraryIcon[]) => Promise<boolean>;
+  /** Move one icon into a My Library category (folder field). Empty = uncategorized. */
+  setUserIconCategory: (id: string, category: string | null) => Promise<boolean>;
+  /** Rename a My Library category across all icons. */
+  renameUserCategory: (from: string, to: string) => Promise<boolean>;
+  /** Remove category tag from all icons in it (icons stay in library). */
+  clearUserCategory: (category: string) => Promise<boolean>;
   addUserTemplate: (template: UserTemplate) => Promise<boolean>;
   removeUserTemplate: (id: string) => void;
   togglePinTemplate: (id: string) => void;
@@ -66,9 +81,17 @@ export interface AppActions {
   setShowGrid: (on: boolean) => void;
   setSnapOn: (on: boolean) => void;
   setColumnGuides: (n: number) => void;
+  setRowGuides: (n: number) => void;
   setGlassOpacity: (n: number) => void;
   setGlassHue: (n: number) => void;
   setThemeMode: (mode: 'dark' | 'light') => void;
+  setLeftPanelWidth: (w: number) => void;
+  setLeftPanelOpen: (open: boolean) => void;
+  setRightPanelOpen: (open: boolean) => void;
+  toggleLeftPanel: () => void;
+  toggleRightPanel: () => void;
+  setOpenDocuments: (docs: OpenDocument[]) => void;
+  setActiveDocumentId: (id: string) => void;
   hydrateLibrary: () => Promise<void>;
 }
 
@@ -100,35 +123,89 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
   helpOpen: false,
   showGrid: true,
   snapOn: true,
-  columnGuides: 0,
+  columnGuides: 1,
+  rowGuides: 1,
   glassOpacity: typeof window !== 'undefined' ? loadGlassOpacity() : 0.22,
   glassHue: typeof window !== 'undefined' ? loadGlassHue() : 220,
   themeMode: typeof window !== 'undefined' ? loadThemeMode() : 'dark',
+  leftPanelWidth: typeof window !== 'undefined' ? loadLeftPanelWidth() : 280,
+  leftPanelOpen: typeof window !== 'undefined' ? loadLeftPanelOpen() : true,
+  rightPanelOpen: typeof window !== 'undefined' ? loadRightPanelOpen() : true,
+  openDocuments: [
+    {
+      id: 'doc_initial',
+      name: 'Untitled figure',
+      artboardWidth: 900,
+      artboardHeight: 600,
+      snapshot: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  ],
+  activeDocumentId: 'doc_initial',
 
   setTool: (tool) => {
+    // Drop any in-progress “draw text box” when leaving/changing tools
+    void import('../lib/canvasController').then((m) => {
+      if (m.isTextBoxDrawActive?.()) m.cancelTextBoxDraw();
+    });
+    // Opening a rail tool also reveals the left panel if it was hidden
+    if (!get().leftPanelOpen) {
+      saveLeftPanelOpen(true);
+    }
     if (tool === 'library' || tool === 'uploads') {
-      set({ tool, libraryTab: tool === 'uploads' ? 'uploads' : 'library' });
+      // Both map to My Library in the left panel
+      set({
+        tool: 'library',
+        libraryTab: 'uploads',
+        leftPanelOpen: true,
+      });
     } else {
-      set({ tool });
+      set({ tool, leftPanelOpen: true });
     }
   },
-  setLibraryTab: (libraryTab) => set({ libraryTab, tool: libraryTab }),
-  setProjectName: (projectName) => set({ projectName }),
+  setLibraryTab: (libraryTab) => {
+    if (!get().leftPanelOpen) saveLeftPanelOpen(true);
+    set({ libraryTab, tool: libraryTab, leftPanelOpen: true });
+  },
+  setProjectName: (projectName) => {
+    const id = get().activeDocumentId;
+    const openDocuments = get().openDocuments.map((d) =>
+      d.id === id ? { ...d, name: projectName, updatedAt: new Date().toISOString() } : d,
+    );
+    set({ projectName, openDocuments });
+  },
   setSearch: (search) => set({ search }),
   setCategory: (category) => set({ category }),
   addUserIcons: async (icons, opts) => {
-    const next = [...icons, ...get().userLibrary];
-    const seen = new Set<string>();
-    const unique = next.filter((i) => {
-      if (seen.has(i.id)) return false;
-      seen.add(i.id);
-      return true;
-    });
-    const ok = await idbSaveLibrary(unique);
+    // Soft-dedupe by category + name so re-importing the same zip merges
+    // into existing entries (keeps prior id for favorites stability).
+    const keyOf = (i: LibraryIcon) => {
+      const cat = (i.folder || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const name = i.name.trim().toLowerCase();
+      return `${cat}::${name}`;
+    };
+    const next = [...get().userLibrary];
+    for (const icon of icons) {
+      const k = keyOf(icon);
+      const idx = next.findIndex((i) => keyOf(i) === k);
+      if (idx >= 0) {
+        const prev = next[idx];
+        next[idx] = {
+          ...icon,
+          id: prev.id,
+          folder: icon.folder ?? prev.folder,
+        };
+      } else {
+        next.unshift(icon);
+      }
+    }
+    const ok = await idbSaveLibrary(next);
     if (opts?.stayOnTool) {
-      set({ userLibrary: unique });
+      set({ userLibrary: next });
     } else {
-      set({ userLibrary: unique, libraryTab: 'uploads', tool: 'uploads' });
+      // Imports land in My Library (rail tool "library")
+      set({ userLibrary: next, libraryTab: 'uploads', tool: 'library' });
     }
     if (!ok) {
       window.setTimeout(() => {
@@ -143,6 +220,43 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
     const pinned = get().pinnedIconIds.filter((p) => p !== id);
     savePinnedIconIds(pinned);
     set({ userLibrary: unique, pinnedIconIds: pinned });
+  },
+  setUserLibrary: async (icons) => {
+    const ok = await idbSaveLibrary(icons);
+    set({ userLibrary: icons });
+    return ok;
+  },
+  setUserIconCategory: async (id, category) => {
+    const cat = category?.trim() || undefined;
+    const unique = get().userLibrary.map((i) =>
+      i.id === id ? { ...i, folder: cat } : i,
+    );
+    const ok = await idbSaveLibrary(unique);
+    set({ userLibrary: unique });
+    return ok;
+  },
+  renameUserCategory: async (from, to) => {
+    const fromKey = from.trim().toLowerCase().replace(/\s+/g, ' ');
+    const toName = to.trim().replace(/\s+/g, ' ');
+    if (!fromKey || !toName) return false;
+    const unique = get().userLibrary.map((i) => {
+      const f = (i.folder || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      return f === fromKey ? { ...i, folder: toName } : i;
+    });
+    const ok = await idbSaveLibrary(unique);
+    set({ userLibrary: unique });
+    return ok;
+  },
+  clearUserCategory: async (category) => {
+    const key = category.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!key) return false;
+    const unique = get().userLibrary.map((i) => {
+      const f = (i.folder || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      return f === key ? { ...i, folder: undefined } : i;
+    });
+    const ok = await idbSaveLibrary(unique);
+    set({ userLibrary: unique });
+    return ok;
   },
   addUserTemplate: async (template) => {
     const next = [template, ...get().userTemplates.filter((t) => t.id !== template.id)];
@@ -228,7 +342,9 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
   setShowGrid: (showGrid) => set({ showGrid }),
   setSnapOn: (snapOn) => set({ snapOn }),
   setColumnGuides: (columnGuides) =>
-    set({ columnGuides: Math.max(0, Math.min(12, Math.round(columnGuides))) }),
+    set({ columnGuides: Math.max(1, Math.min(24, Math.round(columnGuides) || 1)) }),
+  setRowGuides: (rowGuides) =>
+    set({ rowGuides: Math.max(1, Math.min(24, Math.round(rowGuides) || 1)) }),
   setGlassOpacity: (n) => {
     const glassOpacity = Math.min(0.5, Math.max(0, n));
     saveGlassOpacity(glassOpacity);
@@ -250,6 +366,31 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
     applyGlassTheme(glassOpacity, glassHue, themeMode);
     set({ themeMode });
   },
+  setLeftPanelWidth: (w) => {
+    const leftPanelWidth = Math.min(520, Math.max(180, Math.round(w)));
+    saveLeftPanelWidth(leftPanelWidth);
+    set({ leftPanelWidth });
+  },
+  setLeftPanelOpen: (open) => {
+    saveLeftPanelOpen(open);
+    set({ leftPanelOpen: open });
+  },
+  setRightPanelOpen: (open) => {
+    saveRightPanelOpen(open);
+    set({ rightPanelOpen: open });
+  },
+  toggleLeftPanel: () => {
+    const open = !get().leftPanelOpen;
+    saveLeftPanelOpen(open);
+    set({ leftPanelOpen: open });
+  },
+  toggleRightPanel: () => {
+    const open = !get().rightPanelOpen;
+    saveRightPanelOpen(open);
+    set({ rightPanelOpen: open });
+  },
+  setOpenDocuments: (openDocuments) => set({ openDocuments }),
+  setActiveDocumentId: (activeDocumentId) => set({ activeDocumentId }),
   hydrateLibrary: async () => {
     const [items, templates, pinned, pinnedIcons, favorites, dockOpen] = await Promise.all([
       idbLoadLibrary(),

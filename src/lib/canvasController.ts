@@ -13,6 +13,7 @@ import {
   Polygon,
   Polyline,
   Rect,
+  Textbox,
   Triangle,
   loadSVGFromString,
   util,
@@ -25,6 +26,14 @@ import {
   clearAlignGuides,
   resetAlignGuideHandlers,
 } from './alignGuides';
+import {
+  enterCropMode as enterCropModeImpl,
+  exitCropMode as exitCropModeImpl,
+  installCropControls,
+  isCropModeActive as isCropModeActiveImpl,
+  isCroppable,
+  resetCrop,
+} from './imageCrop';
 
 // Persist BioArtist metadata across save/load and history
 FabricObject.customProperties = [
@@ -33,7 +42,67 @@ FabricObject.customProperties = [
   'baLocked',
   'baReactionId',
   'baReagentSlot',
+  'baTextBox',
+  'baMinHeight',
+  'baCrop',
+  'baCropMode',
 ];
+
+/**
+ * Fabric Textbox uses `stroke` for glyph outlines, not a rectangular border.
+ * For BioArtist text boxes we repurpose stroke/strokeWidth as a box border and
+ * keep `backgroundColor` as the box fill (Object._renderBackground already does).
+ */
+function isBaTextBox(obj: FabricObject): boolean {
+  return !!(obj as FabricObject & { baTextBox?: boolean }).baTextBox;
+}
+
+function isNoneStroke(v: unknown): boolean {
+  if (v == null) return true;
+  if (typeof v !== 'string') return false;
+  const s = v.trim().toLowerCase();
+  return s === '' || s === 'none' || s === 'transparent' || s === 'rgba(0,0,0,0)' || s === 'rgba(0, 0, 0, 0)';
+}
+
+// Patch once — survives loadFromJSON as long as baTextBox is restored via customProperties.
+const _textboxRender = Textbox.prototype._render;
+Textbox.prototype._render = function (this: Textbox, ctx: CanvasRenderingContext2D) {
+  if (isBaTextBox(this)) {
+    const sw = this.strokeWidth ?? 0;
+    const stroke = this.stroke;
+    if (sw > 0 && !isNoneStroke(stroke)) {
+      const dim = this._getNonTransformedDimensions();
+      ctx.save();
+      ctx.strokeStyle = stroke as string;
+      ctx.lineWidth = sw;
+      ctx.lineJoin = 'miter';
+      ctx.setLineDash([]);
+      // Centered stroke around the text box bounds
+      ctx.strokeRect(-dim.x / 2, -dim.y / 2, dim.x, dim.y);
+      ctx.restore();
+    }
+    // Suppress glyph outline while drawing text
+    const savedStroke = this.stroke;
+    const savedSw = this.strokeWidth;
+    this.stroke = undefined as unknown as string;
+    this.strokeWidth = 0;
+    _textboxRender.call(this, ctx);
+    this.stroke = savedStroke;
+    this.strokeWidth = savedSw;
+    return;
+  }
+  _textboxRender.call(this, ctx);
+};
+
+const _textboxInitDimensions = Textbox.prototype.initDimensions;
+Textbox.prototype.initDimensions = function (this: Textbox) {
+  _textboxInitDimensions.call(this);
+  if (!isBaTextBox(this)) return;
+  const minH = (this as Textbox & { baMinHeight?: number }).baMinHeight;
+  if (typeof minH === 'number' && minH > 0 && (this.height ?? 0) < minH) {
+    this.height = minH;
+  }
+};
 
 let ARTBOARD_W = 900;
 let ARTBOARD_H = 600;
@@ -44,6 +113,13 @@ let historyIndex = -1;
 let historyLock = false;
 /** When true, object:added/removed do not auto-push history (transactional ops). */
 let batchMode = false;
+/**
+ * User zoom (1 = fit-scale only). Fabric viewport stays identity;
+ * display zoom + pan use CSS scale + the workspace scroll container.
+ */
+let userZoom = 1;
+/** Scrollable stage area — used for pan / zoom-to-cursor when zoomed in */
+let scrollEl: HTMLElement | null = null;
 let listeners: {
   onLayers?: () => void;
   onSelection?: () => void;
@@ -64,6 +140,8 @@ function ensureMeta(obj: FabricObject, name?: string) {
   const o = asBa(obj);
   if (!o.baId) o.baId = uid();
   if (!o.baName) o.baName = name || guessName(obj);
+  const t = (obj.type || '').toLowerCase();
+  const isTextObj = t === 'i-text' || t === 'textbox' || t === 'text';
   o.set({
     borderColor: '#8ec5ff',
     cornerColor: '#1a1c22',
@@ -71,13 +149,15 @@ function ensureMeta(obj: FabricObject, name?: string) {
     cornerStyle: 'circle',
     transparentCorners: false,
     borderScaleFactor: 1.5,
-    padding: 2,
+    // Textbox.padding is text inset — do not overwrite with control padding
+    ...(isTextObj ? {} : { padding: 2 }),
   });
 }
 
 function guessName(obj: FabricObject): string {
   const t = (obj.type || 'object').toLowerCase();
-  if (t === 'i-text' || t === 'textbox' || t === 'text') return 'Text';
+  if (t === 'textbox') return 'Text box';
+  if (t === 'i-text' || t === 'text') return 'Text';
   if (t === 'rect') return 'Rectangle';
   if (t === 'ellipse' || t === 'circle') return 'Ellipse';
   if (t === 'line') return 'Line';
@@ -138,16 +218,30 @@ export function initCanvas(el: HTMLCanvasElement): Canvas {
     selectionLineWidth: 1,
   });
 
-  canvas.on('selection:created', () => listeners.onSelection?.());
-  canvas.on('selection:updated', () => listeners.onSelection?.());
-  canvas.on('selection:cleared', () => listeners.onSelection?.());
+  canvas.on('selection:created', () => {
+    installCropControlsOnSelection();
+    listeners.onSelection?.();
+  });
+  canvas.on('selection:updated', () => {
+    installCropControlsOnSelection();
+    listeners.onSelection?.();
+  });
+  canvas.on('selection:cleared', () => {
+    // Leaving selection exits dedicated crop mode
+    if (isCropModeActive()) exitCropMode();
+    listeners.onSelection?.();
+  });
   canvas.on('object:modified', () => {
     listeners.onSelection?.();
     listeners.onLayers?.();
     if (!historyLock && !batchMode) pushHistory();
   });
   canvas.on('object:added', (e) => {
-    if (e.target && !isActiveSelection(e.target)) ensureMeta(e.target);
+    if (e.target && !isActiveSelection(e.target)) {
+      ensureMeta(e.target);
+      // Corners = reshape, sides = crop for figures / pictures
+      if (isCroppable(e.target)) installCropControls(e.target);
+    }
     listeners.onLayers?.();
     notifyObjectCount();
     if (!historyLock && !batchMode) pushHistory();
@@ -162,6 +256,29 @@ export function initCanvas(el: HTMLCanvasElement): Canvas {
     listeners.onSelection?.();
     listeners.onLayers?.();
   });
+
+  // Keep fabric’s hidden editing textarea from scrolling/shifting the app chrome
+  canvas.on('text:editing:entered', (opt) => {
+    const target = (opt as { target?: FabricObject })?.target;
+    if (target && (target instanceof IText || target instanceof Textbox)) {
+      pinFabricTextarea(target as Textbox | IText);
+      // Neutralize any scroll-into-view the browser applied on focus
+      try {
+        const se = document.scrollingElement;
+        if (se) {
+          se.scrollLeft = 0;
+          se.scrollTop = 0;
+        }
+        document.documentElement.scrollLeft = 0;
+        document.body.scrollLeft = 0;
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  // Ensure host exists early
+  if (typeof document !== 'undefined') getFabricTextareaHost();
 
   history = [];
   historyIndex = -1;
@@ -242,6 +359,7 @@ export async function undo() {
   try {
     historyIndex -= 1;
     await canvas.loadFromJSON(JSON.parse(history[historyIndex]));
+    reinstallCropControlsOnAll();
     canvas.requestRenderAll();
   } finally {
     historyLock = false;
@@ -258,6 +376,7 @@ export async function redo() {
   try {
     historyIndex += 1;
     await canvas.loadFromJSON(JSON.parse(history[historyIndex]));
+    reinstallCropControlsOnAll();
     canvas.requestRenderAll();
   } finally {
     historyLock = false;
@@ -266,6 +385,13 @@ export async function redo() {
   listeners.onSelection?.();
   notifyObjectCount();
   listeners.onHistory?.(historyIndex > 0, historyIndex < history.length - 1);
+}
+
+function reinstallCropControlsOnAll() {
+  if (!canvas) return;
+  canvas.getObjects().forEach((o) => {
+    if (isCroppable(o)) installCropControls(o);
+  });
 }
 
 export function getLayers(): LayerInfo[] {
@@ -316,6 +442,86 @@ export function getSelectionProps(): {
       : undefined;
   const fontWeight =
     'fontWeight' in obj ? (obj as IText).fontWeight : undefined;
+  const fontStyle =
+    'fontStyle' in obj && typeof (obj as IText).fontStyle === 'string'
+      ? (obj as IText).fontStyle
+      : undefined;
+  const underline =
+    'underline' in obj ? !!(obj as IText).underline : undefined;
+  const linethrough =
+    'linethrough' in obj ? !!(obj as IText).linethrough : undefined;
+  const textAlignRaw =
+    'textAlign' in obj && typeof (obj as IText).textAlign === 'string'
+      ? (obj as IText).textAlign
+      : undefined;
+  const textAlign =
+    textAlignRaw === 'left' ||
+    textAlignRaw === 'center' ||
+    textAlignRaw === 'right' ||
+    textAlignRaw === 'justify'
+      ? textAlignRaw
+      : undefined;
+  const lineHeight =
+    'lineHeight' in obj && typeof (obj as IText).lineHeight === 'number'
+      ? (obj as IText).lineHeight
+      : undefined;
+  const typeLower = (obj.type || '').toLowerCase();
+  const isTextType =
+    typeLower === 'i-text' || typeLower === 'textbox' || typeLower === 'text';
+  const textContent =
+    isTextType && 'text' in obj && typeof (obj as IText).text === 'string'
+      ? (obj as IText).text
+      : '';
+  const textLines = isTextType
+    ? textContent.split('\n').filter((l) => l.trim().length > 0)
+    : [];
+  const hasBullets = isTextType
+    ? textLines.length > 0 && textLines.every((l) => /^\s*[•○□■]\s?/.test(l))
+    : undefined;
+  const hasNumbers = isTextType
+    ? textLines.length > 0 && textLines.every((l) => /^\s*\d+[.)]\s+/.test(l))
+    : undefined;
+  const bulletStyle = isTextType
+    ? (() => {
+        if (!textLines.length) return null;
+        const map: Record<string, 'disc' | 'circle' | 'square' | 'filled-square'> = {
+          '•': 'disc',
+          '○': 'circle',
+          '□': 'square',
+          '■': 'filled-square',
+        };
+        let style: 'disc' | 'circle' | 'square' | 'filled-square' | null = null;
+        for (const line of textLines) {
+          const m = line.match(/^\s*([•○□■])\s?/);
+          if (!m) return null;
+          const s = map[m[1]] || 'disc';
+          if (style == null) style = s;
+        }
+        return style;
+      })()
+    : undefined;
+  // Super/sub: object-level deltaY (char styles detected live in UI when editing)
+  const scriptMode: 'none' | 'super' | 'sub' | undefined = isTextType
+    ? (() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const dy = (obj as any).deltaY;
+        if (typeof dy === 'number' && dy < -1) return 'super';
+        if (typeof dy === 'number' && dy > 1) return 'sub';
+        return 'none';
+      })()
+    : undefined;
+  const isTextBox =
+    typeLower === 'textbox' || !!(obj as FabricObject & { baTextBox?: boolean }).baTextBox;
+  const bgRaw =
+    'backgroundColor' in obj
+      ? (obj as Textbox).backgroundColor
+      : undefined;
+  const backgroundColor =
+    bgRaw == null || bgRaw === '' || bgRaw === 'none'
+      ? 'transparent'
+      : typeof bgRaw === 'string'
+        ? bgRaw
+        : 'transparent';
 
   return {
     count: active.length,
@@ -339,10 +545,19 @@ export function getSelectionProps(): {
       fontSize,
       fontFamily,
       fontWeight,
+      fontStyle,
+      underline,
+      linethrough,
+      textAlign,
+      lineHeight,
+      hasBullets,
+      hasNumbers,
+      bulletStyle: isTextType ? bulletStyle ?? null : undefined,
+      scriptMode,
       isText:
-        (obj.type || '').toLowerCase() === 'i-text' ||
-        (obj.type || '').toLowerCase() === 'textbox' ||
-        (obj.type || '').toLowerCase() === 'text',
+        typeLower === 'i-text' || typeLower === 'textbox' || typeLower === 'text',
+      isTextBox,
+      backgroundColor: isTextBox ? backgroundColor : undefined,
     },
   };
 }
@@ -681,12 +896,26 @@ export function exportSelectionSvg(): string | null {
   try {
     const raw = active.toSVG();
     if (!raw || !raw.includes('<')) return null;
-    // Wrap fragment in a root svg if needed
-    if (/^\s*<svg\b/i.test(raw)) return raw;
     const bound = active.getBoundingRect();
     const w = Math.max(1, Math.ceil(bound.width || 100));
     const h = Math.max(1, Math.ceil(bound.height || 100));
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">${raw}</svg>`;
+    let svg = raw.trim();
+    // Fabric often emits a fragment or svg without xmlns — fix for <img> thumbs
+    if (!/^\s*<svg\b/i.test(svg)) {
+      svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">${svg}</svg>`;
+    } else {
+      const open = svg.match(/<svg\b[^>]*>/i)?.[0] || '';
+      if (!/\sxmlns\s*=/.test(open)) {
+        svg = svg.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+      }
+      if (/\sxlink:/.test(svg) && !/\sxmlns:xlink\s*=/.test(open)) {
+        svg = svg.replace(/<svg\b/i, '<svg xmlns:xlink="http://www.w3.org/1999/xlink"');
+      }
+      if (!/\bviewBox\s*=/i.test(svg.match(/<svg\b[^>]*>/i)?.[0] || '')) {
+        svg = svg.replace(/<svg\b([^>]*)>/i, `<svg$1 viewBox="0 0 ${w} ${h}">`);
+      }
+    }
+    return svg;
   } catch {
     return null;
   }
@@ -705,28 +934,123 @@ export function downloadSelectionSvg(filename = 'selection.svg'): boolean {
   return true;
 }
 
-/** Build a library icon from the current selection (for favorites). */
+/**
+ * Build a library icon from the current selection (for favorites).
+ * Always tries to store a PNG data-URL in `path` so the favorites dock
+ * shows a reliable thumbnail (SVG-from-Fabric often breaks in <img>).
+ * Keeps SVG in svgContent when available for crisp re-placement.
+ */
 export function selectionAsLibraryIcon(): {
   id: string;
   name: string;
   category: 'symbols';
   path: string;
-  svgContent: string;
+  svgContent?: string;
   source: 'user';
 } | null {
   if (!canvas) return null;
   const active = canvas.getActiveObject();
   if (!active) return null;
-  const svg = exportSelectionSvg();
-  if (!svg) return null;
   const name = asBa(active).baName || guessName(active);
+  const id = `fav/${asBa(active).baId || uid()}-${Date.now()}`;
+
+  // Raster thumbnail — most reliable for the dock
+  let thumbPng = '';
+  try {
+    const br = active.getBoundingRect();
+    const maxSide = Math.max(br.width || 1, br.height || 1, 1);
+    const mult = Math.min(2.5, Math.max(0.5, 120 / maxSide));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (typeof (active as any).toDataURL === 'function') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      thumbPng = (active as any).toDataURL({
+        format: 'png',
+        multiplier: mult,
+        enableRetinaScaling: false,
+      });
+    }
+  } catch (err) {
+    console.warn('[selectionAsLibraryIcon] toDataURL failed', err);
+  }
+
+  // Vector for re-place (groups / paths / text)
+  let svg: string | null = null;
+  try {
+    svg = exportSelectionSvg();
+  } catch {
+    svg = null;
+  }
+
+  // Prefer PNG path for display; keep SVG for place when present
+  if (!thumbPng && !svg) return null;
+
+  // If only SVG, also store a data-URL path so older UI still has something
+  let path = thumbPng;
+  if (!path && svg) {
+    try {
+      path = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+    } catch {
+      path = '';
+    }
+  }
+
   return {
-    id: `fav/${asBa(active).baId || uid()}-${Date.now()}`,
+    id,
     name,
     category: 'symbols',
-    path: '',
-    svgContent: svg,
+    path,
+    svgContent: svg || undefined,
     source: 'user',
+  };
+}
+
+/**
+ * Find an open spot near the artboard center that doesn’t heavily overlap
+ * existing objects (for click-to-place from favorites / library).
+ */
+export function findClearPlacement(opts?: {
+  size?: number;
+  prefer?: { left: number; top: number };
+}): { left: number; top: number } {
+  const size = opts?.size ?? 140;
+  const prefer = opts?.prefer ?? { left: ARTBOARD_W / 2, top: ARTBOARD_H / 2 };
+  if (!canvas) return prefer;
+
+  const objs = canvas.getObjects().filter((o) => o.visible !== false);
+  const pad = size * 0.45;
+  const overlaps = (x: number, y: number) => {
+    for (const o of objs) {
+      try {
+        const b = o.getBoundingRect();
+        const cx = (b.left ?? 0) + (b.width ?? 0) / 2;
+        const cy = (b.top ?? 0) + (b.height ?? 0) / 2;
+        if (Math.abs(cx - x) < pad && Math.abs(cy - y) < pad) return true;
+      } catch {
+        /* ignore */
+      }
+    }
+    return false;
+  };
+
+  if (!overlaps(prefer.left, prefer.top)) return prefer;
+
+  // Spiral search outward
+  const step = Math.max(40, size * 0.55);
+  for (let ring = 1; ring <= 16; ring++) {
+    const n = ring * 6;
+    for (let i = 0; i < n; i++) {
+      const a = (Math.PI * 2 * i) / n;
+      const left = prefer.left + Math.cos(a) * step * ring;
+      const top = prefer.top + Math.sin(a) * step * ring * 0.85;
+      if (left < 40 || top < 40 || left > ARTBOARD_W - 40 || top > ARTBOARD_H - 40) continue;
+      if (!overlaps(left, top)) return { left, top };
+    }
+  }
+  // Last resort: cascade offset
+  placeCascade = (placeCascade + 1) % 12;
+  return {
+    left: prefer.left + placeCascade * 28,
+    top: prefer.top + placeCascade * 18,
   };
 }
 
@@ -970,7 +1294,190 @@ export async function addImageFromDataUrl(
   return img;
 }
 
+/** True when the active selection is a single raster image (FabricImage). */
+export function selectionIsRasterImage(): boolean {
+  if (!canvas) return false;
+  const active = canvas.getActiveObject();
+  if (!active || isActiveSelection(active)) return false;
+  return (
+    active instanceof FabricImage ||
+    (active.type || '').toLowerCase() === 'image'
+  );
+}
+
+/** Figures / pictures that support side-crop + corner reshape. */
+export function selectionIsCroppable(): boolean {
+  if (!canvas) return false;
+  const active = canvas.getActiveObject();
+  if (!active || isActiveSelection(active)) return false;
+  return isCroppable(active);
+}
+
+function installCropControlsOnSelection() {
+  if (!canvas) return;
+  const active = canvas.getActiveObject();
+  if (!active || isActiveSelection(active)) return;
+  if (isCroppable(active)) {
+    installCropControls(active);
+    canvas.requestRenderAll();
+  }
+}
+
+/** Enter Canva-style crop mode (drag sides to crop). */
+export function beginCropMode(): boolean {
+  if (!canvas) return false;
+  const active = canvas.getActiveObject();
+  if (!active || isActiveSelection(active)) return false;
+  if (!isCroppable(active)) return false;
+  return enterCropModeImpl(active);
+}
+
+export function endCropMode(): void {
+  if (isCropModeActiveImpl()) exitCropModeImpl();
+}
+
+export function isCropModeActive(): boolean {
+  return isCropModeActiveImpl();
+}
+
+export function exitCropMode(): void {
+  exitCropModeImpl();
+}
+
+/** Reset crop on the selected figure/picture. */
+export function resetSelectionCrop(): boolean {
+  if (!canvas) return false;
+  const active = canvas.getActiveObject();
+  if (!active || isActiveSelection(active)) return false;
+  if (!isCroppable(active)) return false;
+  resetCrop(active);
+  installCropControls(active);
+  if (isCropModeActiveImpl()) exitCropModeImpl();
+  canvas.requestRenderAll();
+  pushHistory();
+  listeners.onSelection?.();
+  return true;
+}
+
+/**
+ * Phase 1: key out white / solid background on the selected raster image.
+ * Replaces the image source with a transparent PNG (in place).
+ */
+export async function removeSolidBackgroundFromSelection(opts?: {
+  tolerance?: number;
+  color?: { r: number; g: number; b: number };
+}): Promise<{ ok: boolean; removed?: number; error?: string }> {
+  if (!canvas) return { ok: false, error: 'Canvas not ready' };
+  const active = canvas.getActiveObject();
+  if (!active || isActiveSelection(active)) {
+    return { ok: false, error: 'Select a single image first' };
+  }
+  if (
+    !(active instanceof FabricImage) &&
+    (active.type || '').toLowerCase() !== 'image'
+  ) {
+    return { ok: false, error: 'Background remove works on raster images (PNG/JPG), not SVG groups' };
+  }
+
+  const img = active as FabricImage;
+  try {
+    // Prefer the live element; fall back to getSrc()
+    const el =
+      typeof img.getElement === 'function'
+        ? img.getElement()
+        : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (img as any)._element;
+    const src =
+      el && (el instanceof HTMLImageElement || el instanceof HTMLCanvasElement)
+        ? el
+        : typeof img.getSrc === 'function'
+          ? img.getSrc()
+          : '';
+
+    if (!src) {
+      return { ok: false, error: 'Could not read image pixels' };
+    }
+
+    const { removeSolidBackgroundFromSource } = await import('./removeSolidBackground');
+    const { dataUrl, removed } = await removeSolidBackgroundFromSource(src, {
+      tolerance: opts?.tolerance ?? 28,
+      color: opts?.color ?? { r: 255, g: 255, b: 255 },
+      borderConnectedOnly: false,
+    });
+
+    if (removed < 1) {
+      return { ok: false, error: 'No white/solid background pixels found (try a different image)' };
+    }
+
+    // Preserve transform while swapping pixels
+    const left = img.left;
+    const top = img.top;
+    const scaleX = img.scaleX;
+    const scaleY = img.scaleY;
+    const angle = img.angle;
+    const originX = img.originX;
+    const originY = img.originY;
+    const flipX = img.flipX;
+    const flipY = img.flipY;
+    const name = asBa(img).baName;
+
+    if (typeof img.setSrc === 'function') {
+      await img.setSrc(dataUrl, { crossOrigin: 'anonymous' });
+    } else {
+      // Fallback: replace object
+      const next = await FabricImage.fromURL(dataUrl, { crossOrigin: 'anonymous' });
+      next.set({ left, top, scaleX, scaleY, angle, originX, originY, flipX, flipY });
+      ensureMeta(next, name);
+      canvas.remove(img);
+      canvas.add(next);
+      canvas.setActiveObject(next);
+      canvas.requestRenderAll();
+      pushHistory();
+      listeners.onLayers?.();
+      listeners.onSelection?.();
+      return { ok: true, removed };
+    }
+
+    img.set({ left, top, scaleX, scaleY, angle, originX, originY, flipX, flipY });
+    // Keep display size stable if natural size changed slightly
+    img.setCoords();
+    ensureMeta(img, name);
+    // Mark so we know BG was processed
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (img as any).baBgRemoved = true;
+    canvas.requestRenderAll();
+    pushHistory();
+    listeners.onLayers?.();
+    listeners.onSelection?.();
+    return { ok: true, removed };
+  } catch (err) {
+    console.error('[removeSolidBackground]', err);
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Background remove failed',
+    };
+  }
+}
+
+/** Register the overflow scroll container around the artboard (for pan + scrollbars). */
+export function setCanvasScrollElement(el: HTMLElement | null) {
+  scrollEl = el;
+}
+
+export function getCanvasScrollElement() {
+  return scrollEl;
+}
+
+/**
+ * Pan the view. When a scroll container is registered (normal UI path),
+ * this scrolls it so zoomed-in artboards get real scrollbars.
+ */
 export function panBy(dx: number, dy: number) {
+  if (scrollEl) {
+    scrollEl.scrollLeft -= dx;
+    scrollEl.scrollTop -= dy;
+    return;
+  }
   if (!canvas) return;
   const vpt = canvas.viewportTransform;
   if (!vpt) return;
@@ -1021,6 +1528,31 @@ export function applyProps(partial: Partial<SelectionProps>) {
     }
     if (partial.fontWeight !== undefined && 'fontWeight' in obj) {
       (obj as IText).set('fontWeight', partial.fontWeight);
+    }
+    if (partial.fontStyle !== undefined && 'fontStyle' in obj) {
+      (obj as IText).set('fontStyle', partial.fontStyle);
+    }
+    if (partial.underline !== undefined && 'underline' in obj) {
+      (obj as IText).set('underline', partial.underline);
+    }
+    if (partial.linethrough !== undefined && 'linethrough' in obj) {
+      (obj as IText).set('linethrough', partial.linethrough);
+    }
+    if (partial.textAlign !== undefined && 'textAlign' in obj) {
+      (obj as IText).set('textAlign', partial.textAlign);
+    }
+    if (partial.lineHeight !== undefined && 'lineHeight' in obj) {
+      const lh = Math.max(0, Math.min(2, Math.round(partial.lineHeight * 10) / 10));
+      (obj as IText).set('lineHeight', lh);
+      if (typeof (obj as Textbox).initDimensions === 'function') {
+        (obj as Textbox).initDimensions();
+      }
+    }
+    if (partial.backgroundColor !== undefined && 'backgroundColor' in obj) {
+      const bg = isNoneColor(partial.backgroundColor)
+        ? ''
+        : partial.backgroundColor;
+      (obj as Textbox).set('backgroundColor', bg);
     }
     if (partial.locked !== undefined) {
       o.baLocked = partial.locked;
@@ -1098,11 +1630,28 @@ function setStrokeRecursive(obj: FabricObject, stroke: string) {
   }
   const current = obj.stroke;
   const t = (obj.type || '').toLowerCase();
-  const strokeTypes = ['line', 'rect', 'ellipse', 'circle', 'path', 'triangle', 'polygon', 'polyline'];
+  // Textbox stroke = box border (not letter outline). IText stroke would outline glyphs — skip.
+  const strokeTypes = [
+    'line',
+    'rect',
+    'ellipse',
+    'circle',
+    'path',
+    'triangle',
+    'polygon',
+    'polyline',
+    'textbox',
+  ];
   if (isNoneColor(stroke)) {
-    if (strokeTypes.includes(t) || (current && current !== 'none')) {
-      obj.set('stroke', 'transparent');
+    if (strokeTypes.includes(t) || (current && current !== 'none' && t !== 'i-text')) {
+      obj.set('stroke', t === 'textbox' ? '' : 'transparent');
+      if (t === 'textbox') obj.set('strokeWidth', 0);
     }
+    return;
+  }
+  if (t === 'textbox') {
+    obj.set('stroke', stroke);
+    if ((obj.strokeWidth ?? 0) <= 0) obj.set('strokeWidth', 1);
     return;
   }
   if (current && current !== 'none') {
@@ -1223,8 +1772,15 @@ function placeShape(obj: FabricObject, name: string) {
   canvas.requestRenderAll();
 }
 
+/** Free-standing text label (no box border). */
 export function addText(text = 'Label') {
-  if (!canvas) return;
+  return addTextLabel(text);
+}
+
+export function addTextLabel(text = 'Label') {
+  if (!canvas) return null;
+  // Leave any in-progress box-draw mode (safe no-op if inactive)
+  cancelTextBoxDraw();
   const t = new IText(text, {
     left: ARTBOARD_W / 2,
     top: ARTBOARD_H / 2,
@@ -1235,12 +1791,369 @@ export function addText(text = 'Label') {
     fill: DEEP_BLACK,
     editable: true,
   });
-  ensureMeta(t, 'Text');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (t as any).hiddenTextareaContainer = getFabricTextareaHost();
+  ensureMeta(t, 'Text label');
   canvas.add(t);
   canvas.setActiveObject(t);
   canvas.requestRenderAll();
-  t.enterEditing();
-  t.selectAll();
+  requestAnimationFrame(() => {
+    try {
+      pinFabricTextarea(t);
+      t.enterEditing();
+      t.selectAll();
+    } catch {
+      /* ignore */
+    }
+  });
+  return t;
+}
+
+// ── Draw text box (click-drag) ─────────────────────────────────────────────
+let textBoxDrawActive = false;
+let textBoxDrawStart: { x: number; y: number } | null = null;
+let textBoxDrawGuide: Rect | null = null;
+let textBoxHandlersBound = false;
+
+/**
+ * Scene coords for pointer events. Must NOT use fabric getScenePoint alone —
+ * the artboard is CSS-scaled (fitScale), so we map client → artboard via the
+ * upper canvas bounding box (same path as drag/drop).
+ */
+function scenePointFromEvent(opt: {
+  e?: Event;
+  absolutePointer?: { x: number; y: number };
+  scenePoint?: { x: number; y: number };
+} | undefined): { x: number; y: number } | null {
+  if (!canvas) return null;
+  const e = opt?.e as MouseEvent | TouchEvent | undefined;
+  let clientX: number | undefined;
+  let clientY: number | undefined;
+  if (e && 'clientX' in e && typeof e.clientX === 'number') {
+    clientX = e.clientX;
+    clientY = e.clientY;
+  } else if (e && 'touches' in e && e.touches?.[0]) {
+    clientX = e.touches[0].clientX;
+    clientY = e.touches[0].clientY;
+  } else if (e && 'changedTouches' in e && e.changedTouches?.[0]) {
+    clientX = e.changedTouches[0].clientX;
+    clientY = e.changedTouches[0].clientY;
+  }
+  if (clientX != null && clientY != null) {
+    // Prefer upper canvas (event target surface); fall back to lower canvas
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const upper = (canvas as any).upperCanvasEl as HTMLCanvasElement | undefined;
+    const el = upper || canvas.getElement();
+    return clientToScene(clientX, clientY, el);
+  }
+  if (opt?.scenePoint) return { x: opt.scenePoint.x, y: opt.scenePoint.y };
+  if (opt?.absolutePointer) return { x: opt.absolutePointer.x, y: opt.absolutePointer.y };
+  return null;
+}
+
+function finishTextBoxDraw() {
+  textBoxDrawActive = false;
+  textBoxDrawStart = null;
+  if (textBoxDrawGuide && canvas) {
+    canvas.remove(textBoxDrawGuide);
+    textBoxDrawGuide = null;
+  }
+  if (canvas) {
+    canvas.defaultCursor = 'default';
+    canvas.hoverCursor = 'move';
+    canvas.selection = true;
+    canvas.skipTargetFind = false;
+    canvas.requestRenderAll();
+  }
+}
+
+function onTextBoxMouseDown(opt: {
+  e?: Event;
+  absolutePointer?: { x: number; y: number };
+  scenePoint?: { x: number; y: number };
+}) {
+  if (!canvas || !textBoxDrawActive) return;
+  // Already drawing a guide (e.g. multi-button) — ignore
+  if (textBoxDrawStart) return;
+  const p = scenePointFromEvent(opt);
+  if (!p) return;
+  opt?.e?.preventDefault?.();
+  textBoxDrawStart = p;
+  // Fabric 7 defaults origin to center — force top-left so the box grows from the click
+  textBoxDrawGuide = new Rect({
+    left: p.x,
+    top: p.y,
+    width: 1,
+    height: 1,
+    originX: 'left',
+    originY: 'top',
+    fill: 'rgba(142, 197, 255, 0.08)',
+    stroke: '#000000',
+    strokeWidth: 1,
+    strokeDashArray: [4, 3],
+    selectable: false,
+    evented: false,
+    excludeFromExport: true,
+    objectCaching: false,
+  });
+  batchMode = true;
+  canvas.add(textBoxDrawGuide);
+  batchMode = false;
+  canvas.requestRenderAll();
+}
+
+function onTextBoxMouseMove(opt: {
+  e?: Event;
+  absolutePointer?: { x: number; y: number };
+  scenePoint?: { x: number; y: number };
+}) {
+  if (!canvas || !textBoxDrawActive || !textBoxDrawStart || !textBoxDrawGuide) return;
+  const p = scenePointFromEvent(opt);
+  if (!p) return;
+  const left = Math.min(textBoxDrawStart.x, p.x);
+  const top = Math.min(textBoxDrawStart.y, p.y);
+  const width = Math.max(1, Math.abs(p.x - textBoxDrawStart.x));
+  const height = Math.max(1, Math.abs(p.y - textBoxDrawStart.y));
+  textBoxDrawGuide.set({ left, top, width, height, originX: 'left', originY: 'top' });
+  textBoxDrawGuide.setCoords();
+  canvas.requestRenderAll();
+}
+
+function onTextBoxMouseUp(opt: {
+  e?: Event;
+  absolutePointer?: { x: number; y: number };
+  scenePoint?: { x: number; y: number };
+}) {
+  if (!canvas || !textBoxDrawActive || !textBoxDrawStart) return;
+  const p = scenePointFromEvent(opt);
+  const end = p || textBoxDrawStart;
+  const left = Math.min(textBoxDrawStart.x, end.x);
+  const top = Math.min(textBoxDrawStart.y, end.y);
+  let width = Math.abs(end.x - textBoxDrawStart.x);
+  let height = Math.abs(end.y - textBoxDrawStart.y);
+
+  // Tiny click → default size box anchored at click point
+  if (width < 24) width = 160;
+  if (height < 20) height = 48;
+
+  if (textBoxDrawGuide) {
+    batchMode = true;
+    canvas.remove(textBoxDrawGuide);
+    batchMode = false;
+    textBoxDrawGuide = null;
+  }
+
+  // Clear draw mode before enterEditing so selection/cursors restore cleanly
+  const startSnapshot = textBoxDrawStart;
+  textBoxDrawStart = null;
+  textBoxDrawActive = false;
+  if (canvas) {
+    canvas.defaultCursor = 'default';
+    canvas.hoverCursor = 'move';
+    canvas.selection = true;
+    canvas.skipTargetFind = false;
+  }
+  void startSnapshot;
+
+  const box = createTextBoxAt(left, top, width, height);
+  if (box) {
+    canvas.setActiveObject(box);
+    canvas.requestRenderAll();
+    // Defer editing one frame so layout/offset settle after draw mode ends
+    requestAnimationFrame(() => {
+      try {
+        // Keep hidden textarea from scrolling the app shell into view
+        pinFabricTextarea(box);
+        box.enterEditing();
+        box.selectAll();
+      } catch {
+        /* ignore */
+      }
+      listeners.onSelection?.();
+    });
+  } else {
+    canvas.requestRenderAll();
+  }
+}
+
+function ensureTextBoxDrawHandlers() {
+  if (!canvas || textBoxHandlersBound) return;
+  textBoxHandlersBound = true;
+  canvas.on('mouse:down', onTextBoxMouseDown);
+  canvas.on('mouse:move', onTextBoxMouseMove);
+  canvas.on('mouse:up', onTextBoxMouseUp);
+}
+
+/** Shared off-screen host so fabric’s editing <textarea> never expands/scrolls layout. */
+let fabricTextareaHost: HTMLDivElement | null = null;
+
+function getFabricTextareaHost(): HTMLDivElement {
+  if (fabricTextareaHost && fabricTextareaHost.isConnected) return fabricTextareaHost;
+  const el = document.createElement('div');
+  el.setAttribute('data-ba-fabric-textarea-host', '1');
+  el.style.cssText =
+    'position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;opacity:0;pointer-events:none;z-index:-1;';
+  document.body.appendChild(el);
+  fabricTextareaHost = el;
+  return el;
+}
+
+/** Pin the hidden editing field so focus cannot scroll the app shell. */
+function pinFabricTextarea(obj: Textbox | IText) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const anyObj = obj as any;
+  anyObj.hiddenTextareaContainer = getFabricTextareaHost();
+  const ta = anyObj.hiddenTextarea as HTMLTextAreaElement | null | undefined;
+  if (ta) {
+    ta.style.position = 'fixed';
+    ta.style.left = '0px';
+    ta.style.top = '0px';
+    ta.style.width = '1px';
+    ta.style.height = '1px';
+    ta.style.opacity = '0';
+    ta.style.padding = '0';
+    ta.style.margin = '0';
+    ta.style.border = 'none';
+    ta.style.overflow = 'hidden';
+    ta.setAttribute('aria-hidden', 'true');
+  }
+}
+
+/** Equal inset on all sides so text doesn’t hug the border (Fabric Textbox padding). */
+export const TEXT_BOX_PADDING = 12;
+
+function createTextBoxAt(
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+  text = 'Text',
+): Textbox | null {
+  if (!canvas) return null;
+  const pad = TEXT_BOX_PADDING;
+  // Drawn size is outer box; keep a usable min so padding still leaves room for text
+  const w = Math.max(48, width);
+  const h = Math.max(36, height);
+  const box = new Textbox(text, {
+    left,
+    top,
+    width: w,
+    // Critical: Fabric 7 defaults to center origin — without left/top the box
+    // is centered on the click instead of growing from the drag origin.
+    originX: 'left',
+    originY: 'top',
+    fontFamily: 'Inter, system-ui, sans-serif',
+    fontSize: 20,
+    fill: DEEP_BLACK,
+    // Box fill (Object._renderBackground); empty = transparent
+    backgroundColor: '',
+    // Box border (repurposed via Textbox prototype patch above)
+    stroke: '#000000',
+    strokeWidth: 1.5,
+    strokeUniform: true,
+    editable: true,
+    splitByGrapheme: false,
+    textAlign: 'left',
+    // Equal narrow margins: top / right / bottom / left
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ...({ padding: pad } as { padding: number }),
+  });
+  // Host for hidden textarea before first edit (avoids layout scroll on focus)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (box as any).hiddenTextareaContainer = getFabricTextareaHost();
+  ensureMeta(box, 'Text box');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (box as any).baTextBox = true;
+  // Keep drawn height until user enables “Fit to text”
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (box as any).baMinHeight = h;
+  if (typeof (box as Textbox).initDimensions === 'function') {
+    (box as Textbox).initDimensions();
+  }
+  // ensureMeta may set control padding — re-apply equal text inset after
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (box as any).set({ padding: pad });
+  box.setCoords();
+  canvas.add(box);
+  return box;
+}
+
+/**
+ * Enter click-drag mode: draw a rectangle, then create a bordered Textbox.
+ * Escape cancels. Call from the Text panel “Add text box” button.
+ */
+export function beginTextBoxDraw(): void {
+  if (!canvas) return;
+  ensureTextBoxDrawHandlers();
+  finishTextBoxDraw();
+  textBoxDrawActive = true;
+  canvas.discardActiveObject();
+  canvas.selection = false;
+  canvas.skipTargetFind = true;
+  canvas.defaultCursor = 'crosshair';
+  canvas.hoverCursor = 'crosshair';
+  canvas.requestRenderAll();
+}
+
+export function cancelTextBoxDraw(): void {
+  finishTextBoxDraw();
+}
+
+export function isTextBoxDrawActive(): boolean {
+  return textBoxDrawActive;
+}
+
+/** Place a default text box at artboard center (no drag). */
+export function addTextBox(text = 'Text') {
+  if (!canvas) return null;
+  const w = 180;
+  const h = 56;
+  const box = createTextBoxAt(ARTBOARD_W / 2 - w / 2, ARTBOARD_H / 2 - h / 2, w, h, text);
+  if (!box) return null;
+  canvas.setActiveObject(box);
+  canvas.requestRenderAll();
+  try {
+    box.enterEditing();
+    box.selectAll();
+  } catch {
+    /* ignore */
+  }
+  return box;
+}
+
+/**
+ * Shrink text box to hug current text: width fits longest line, height follows lines
+ * (clears the drawn min-height so the border snaps to the text).
+ */
+export function fitTextBoxToContent(): boolean {
+  if (!canvas) return false;
+  const active = canvas.getActiveObjects().filter((o) => {
+    const t = (o.type || '').toLowerCase();
+    return t === 'textbox' || isBaTextBox(o);
+  });
+  if (!active.length) return false;
+  try {
+    active.forEach((obj) => {
+      const tb = obj as Textbox & { baMinHeight?: number; padding?: number };
+      // Drop fixed min height so height hugs text
+      tb.baMinHeight = undefined;
+      // Measure natural text width (unwrapped preference: current wrap width content)
+      const measured =
+        typeof tb.calcTextWidth === 'function' ? tb.calcTextWidth() : tb.width || 80;
+      const pad = typeof tb.padding === 'number' ? tb.padding * 2 : 16;
+      const nextW = Math.max(40, Math.ceil(measured + pad + 4));
+      tb.set({ width: nextW });
+      if (typeof tb.initDimensions === 'function') tb.initDimensions();
+      tb.setCoords();
+    });
+    canvas.requestRenderAll();
+    listeners.onSelection?.();
+    scheduleHistoryPush();
+    return true;
+  } catch (err) {
+    console.warn('[fitTextBoxToContent]', err);
+    return false;
+  }
 }
 
 export function addShape(kind: ShapeKind) {
@@ -1774,17 +2687,52 @@ export function addReagentsToSelectedArrow(opts?: {
   return true;
 }
 
-export function setZoom(zoom: number) {
-  if (!canvas) return;
+/**
+ * Set user zoom (0.25–3). Fabric viewport stays identity; the React stage
+ * applies CSS scale and grows so the workspace can scroll when zoomed in.
+ *
+ * @param anchorClient optional cursor position to keep under the pointer while zooming
+ */
+export function setZoom(
+  zoom: number,
+  anchorClient?: { clientX: number; clientY: number },
+) {
   const z = Math.min(3, Math.max(0.25, zoom));
-  const center = canvas.getCenterPoint();
-  canvas.zoomToPoint(center, z);
-  canvas.requestRenderAll();
+  const prev = userZoom;
+  userZoom = z;
+
+  // Keep fabric at identity — CSS + scroll own the view
+  if (canvas) {
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0] as TMat2D);
+    canvas.requestRenderAll();
+  }
+
   listeners.onZoom?.(z);
+
+  // After React reflows stage size, re-anchor scroll so zoom feels centered on cursor
+  if (scrollEl && Math.abs(z - prev) > 0.0001) {
+    const el = scrollEl;
+    const ratio = z / (prev || 1);
+    requestAnimationFrame(() => {
+      if (!scrollEl) return;
+      const rect = el.getBoundingClientRect();
+      const ax = anchorClient
+        ? anchorClient.clientX - rect.left
+        : rect.width / 2;
+      const ay = anchorClient
+        ? anchorClient.clientY - rect.top
+        : rect.height / 2;
+      // Content point under anchor before zoom → keep under anchor after
+      const contentX = el.scrollLeft + ax;
+      const contentY = el.scrollTop + ay;
+      el.scrollLeft = contentX * ratio - ax;
+      el.scrollTop = contentY * ratio - ay;
+    });
+  }
 }
 
 export function getZoom() {
-  return canvas?.getZoom() ?? 1;
+  return userZoom;
 }
 
 export function zoomBy(delta: number) {
@@ -1792,14 +2740,24 @@ export function zoomBy(delta: number) {
 }
 
 /**
- * Reset pan/zoom to identity so the full artboard is visible.
- * Display scaling (fit into the workspace) is handled in FabricCanvas via CSS.
+ * Reset pan/zoom so the full artboard is visible (CSS fit-scale still applies).
  */
 export function fitToScreen() {
-  if (!canvas) return;
-  canvas.setViewportTransform([1, 0, 0, 1, 0, 0] as TMat2D);
-  canvas.setZoom(1);
-  canvas.requestRenderAll();
+  userZoom = 1;
+  if (canvas) {
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0] as TMat2D);
+    canvas.requestRenderAll();
+  }
+  if (scrollEl) {
+    // Center artboard in the scrollport after reflow
+    requestAnimationFrame(() => {
+      if (!scrollEl) return;
+      const maxX = scrollEl.scrollWidth - scrollEl.clientWidth;
+      const maxY = scrollEl.scrollHeight - scrollEl.clientHeight;
+      scrollEl.scrollLeft = Math.max(0, maxX / 2);
+      scrollEl.scrollTop = Math.max(0, maxY / 2);
+    });
+  }
   listeners.onZoom?.(1);
 }
 
@@ -1832,24 +2790,30 @@ export function clientToScene(clientX: number, clientY: number, el: HTMLElement)
   if (rect.width <= 0 || rect.height <= 0) {
     return { x: ARTBOARD_W / 2, y: ARTBOARD_H / 2 };
   }
-  // Map through displayed (possibly CSS-scaled) box → artboard pixels
+  // Map through displayed (CSS-scaled + scrolled) box → artboard scene pixels.
+  // Fabric viewport is kept at identity; pan is scroll, zoom is CSS scale.
   const localX = ((clientX - rect.left) / rect.width) * ARTBOARD_W;
   const localY = ((clientY - rect.top) / rect.height) * ARTBOARD_H;
-  // Then undo fabric viewport (zoom + pan)
-  const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
-  const zoom = vpt[0] || canvas.getZoom() || 1;
-  const x = (localX - vpt[4]) / zoom;
-  const y = (localY - vpt[5]) / zoom;
-  return { x, y };
+  return { x: localX, y: localY };
 }
 
 export function clearCanvas() {
   if (!canvas) return;
-  withHistory(() => {
-    canvas!.clear();
-    canvas!.backgroundColor = '#ffffff';
-    canvas!.requestRenderAll();
-  });
+  historyLock = true;
+  try {
+    canvas.clear();
+    canvas.backgroundColor = '#ffffff';
+    canvas.requestRenderAll();
+  } finally {
+    historyLock = false;
+  }
+  // Fresh history for a blank document
+  history = [JSON.stringify(canvasJSON())];
+  historyIndex = 0;
+  listeners.onHistory?.(false, false);
+  listeners.onLayers?.();
+  listeners.onSelection?.();
+  notifyObjectCount();
 }
 
 export function getObjectCount() {
@@ -1876,6 +2840,7 @@ export async function importJSON(data: {
       setArtboardSize(data.artboard.width, data.artboard.height);
     }
     await canvas.loadFromJSON(data.canvas);
+    reinstallCropControlsOnAll();
     canvas.requestRenderAll();
   } finally {
     historyLock = false;
@@ -1901,24 +2866,58 @@ function withIdentityViewport<T>(fn: () => T): T {
     canvas.setViewportTransform(prev);
     canvas.setZoom(prevZoom);
     canvas.requestRenderAll();
-    listeners.onZoom?.(prevZoom);
+    // Do NOT notify onZoom — UI zoom is CSS userZoom, not fabric zoom
   }
 }
 
-export function exportPng(multiplier = 2): string {
+/**
+ * Raster export of the artboard at identity viewport.
+ * multiplier scales output pixels (use ppi / DESIGN_DPI for print PPI).
+ */
+export function exportRaster(opts: {
+  format?: 'png' | 'jpeg';
+  multiplier?: number;
+  quality?: number;
+}): string {
   if (!canvas) return '';
+  const format = opts.format === 'jpeg' ? 'jpeg' : 'png';
+  const multiplier = Math.max(0.25, Math.min(10, opts.multiplier ?? 2));
+  const quality = Math.max(0.1, Math.min(1, opts.quality ?? 1));
   return withIdentityViewport(() =>
     canvas!.toDataURL({
-      format: 'png',
+      format,
       multiplier,
-      enableRetinaScaling: true,
+      quality,
+      // Multiplier fully controls resolution (avoid double-scaling on retina)
+      enableRetinaScaling: false,
     }),
   );
+}
+
+/** @deprecated Prefer exportRaster */
+export function exportPng(multiplier = 2): string {
+  return exportRaster({ format: 'png', multiplier });
 }
 
 export function exportSvg(): string {
   if (!canvas) return '';
   return withIdentityViewport(() => canvas!.toSVG());
+}
+
+/**
+ * Temporarily clear artboard fill for transparent PNG export, then restore.
+ */
+export function withTransparentBackground<T>(fn: () => T): T {
+  if (!canvas) return fn();
+  const prev = canvas.backgroundColor;
+  try {
+    canvas.backgroundColor = '';
+    canvas.requestRenderAll();
+    return fn();
+  } finally {
+    canvas.backgroundColor = prev;
+    canvas.requestRenderAll();
+  }
 }
 
 export async function fetchSvgText(path: string): Promise<string> {

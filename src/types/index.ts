@@ -4,6 +4,9 @@ import type { LibraryIcon } from '../data/catalog';
 export type ToolId =
   | 'library'
   | 'uploads'
+  | 'bioicons'
+  | 'nih'
+  | 'servier'
   | 'shapes'
   | 'lines'
   | 'text'
@@ -12,6 +15,23 @@ export type ToolId =
   | 'ai'
   | 'chem';
 export type LibraryTab = 'library' | 'uploads';
+
+/** One open figure tab (multi-document). */
+export interface OpenDocument {
+  id: string;
+  name: string;
+  artboardWidth: number;
+  artboardHeight: number;
+  /** Last captured canvas JSON payload; null = blank / not yet snapshotted */
+  snapshot: {
+    version?: number;
+    artboard?: { width: number; height: number };
+    canvas?: unknown;
+    projectName?: string;
+  } | null;
+  createdAt: string;
+  updatedAt: string;
+}
 
 /** User-imported figure template (canvas snapshot) */
 export interface UserTemplate {
@@ -97,7 +117,25 @@ export interface SelectionProps {
   fontSize?: number;
   fontFamily?: string;
   fontWeight?: string | number;
+  fontStyle?: string;
+  underline?: boolean;
+  linethrough?: boolean;
+  textAlign?: 'left' | 'center' | 'right' | 'justify';
+  /** Fabric lineHeight multiplier — shown as “Line spacing” (0–2). */
+  lineHeight?: number;
+  /** True when every non-empty line starts with a bullet. */
+  hasBullets?: boolean;
+  /** True when every non-empty line starts with a number marker (1. 2.). */
+  hasNumbers?: boolean;
+  /** Active bullet glyph style when hasBullets. */
+  bulletStyle?: 'disc' | 'circle' | 'square' | 'filled-square' | null;
+  /** Super/subscript detection for selection or object. */
+  scriptMode?: 'none' | 'super' | 'sub';
   isText?: boolean;
+  /** Bordered text box (Fabric Textbox with baTextBox). */
+  isTextBox?: boolean;
+  /** Box fill behind text (text boxes only). */
+  backgroundColor?: string;
 }
 
 export interface AppState {
@@ -130,13 +168,25 @@ export interface AppState {
   helpOpen: boolean;
   showGrid: boolean;
   snapOn: boolean;
+  /** Vertical layout bands (1 = no split, ≥2 draws equal columns). Visual only. */
   columnGuides: number;
+  /** Horizontal layout bands (1 = no split, ≥2 draws equal rows). Visual only. */
+  rowGuides: number;
   /** Glass pane opacity 0–0.5 (0–50% frost) */
   glassOpacity: number;
   /** Glass tint hue 0–360 */
   glassHue: number;
   /** App chrome theme: dark liquid glass or light frosted */
   themeMode: 'dark' | 'light';
+  /** Left content panel width in px (resizable for all rail tools) */
+  leftPanelWidth: number;
+  /** Whether the left content panel (Assets / tools) is visible */
+  leftPanelOpen: boolean;
+  /** Whether the right Properties / Layers panel is visible */
+  rightPanelOpen: boolean;
+  /** Multi-document tabs */
+  openDocuments: OpenDocument[];
+  activeDocumentId: string;
 }
 
 export type FabricCanvas = Canvas;

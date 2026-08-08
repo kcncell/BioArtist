@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { FabricCanvas } from './components/canvas/FabricCanvas';
 import { ExportDialog } from './components/export/ExportDialog';
 import { KeyboardShortcuts } from './components/layout/KeyboardShortcuts';
+import { LeftPanelShell } from './components/layout/LeftPanelShell';
 import { LeftRail } from './components/layout/LeftRail';
 import { RightPanel } from './components/layout/RightPanel';
 import { ShortcutsHelp } from './components/layout/ShortcutsHelp';
@@ -88,12 +89,25 @@ export default function App() {
     return unsub;
   }, [showToast]);
 
+  const leftPanelOpen = useAppStore((s) => s.leftPanelOpen);
+  const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
+
   return (
     <div className="ba-app">
       <TopBar />
-      <div className="ba-main">
+      <div
+        className={[
+          'ba-main',
+          !leftPanelOpen ? 'ba-main-left-collapsed' : '',
+          !rightPanelOpen ? 'ba-main-right-collapsed' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      >
         <LeftRail />
-        <LibraryPanel />
+        <LeftPanelShell>
+          <LibraryPanel />
+        </LeftPanelShell>
         <FabricCanvas />
         <RightPanel />
       </div>

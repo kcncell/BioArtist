@@ -7,6 +7,9 @@ const FAVORITES_DOCK_OPEN_KEY = 'bioartist-favorites-dock-open';
 const GLASS_OPACITY_KEY = 'bioartist-glass-opacity-v7';
 const GLASS_HUE_KEY = 'bioartist-glass-hue-v7';
 const THEME_MODE_KEY = 'bioartist-theme-mode-v7';
+const LEFT_PANEL_WIDTH_KEY = 'bioartist-left-panel-width-v1';
+const LEFT_PANEL_OPEN_KEY = 'bioartist-left-panel-open-v1';
+const RIGHT_PANEL_OPEN_KEY = 'bioartist-right-panel-open-v1';
 
 const DB_NAME = 'bioartist';
 const DB_VERSION = 3;
@@ -366,6 +369,60 @@ export function loadThemeMode(): StoredThemeMode {
 export function saveThemeMode(mode: StoredThemeMode): void {
   try {
     localStorage.setItem(THEME_MODE_KEY, mode);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadLeftPanelWidth(): number {
+  try {
+    const n = Number(localStorage.getItem(LEFT_PANEL_WIDTH_KEY));
+    if (!Number.isFinite(n)) return 280;
+    return Math.min(520, Math.max(180, Math.round(n)));
+  } catch {
+    return 280;
+  }
+}
+
+export function saveLeftPanelWidth(w: number): void {
+  try {
+    localStorage.setItem(LEFT_PANEL_WIDTH_KEY, String(Math.round(w)));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadLeftPanelOpen(): boolean {
+  try {
+    const v = localStorage.getItem(LEFT_PANEL_OPEN_KEY);
+    if (v === null) return true;
+    return v !== '0' && v !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+export function saveLeftPanelOpen(open: boolean): void {
+  try {
+    localStorage.setItem(LEFT_PANEL_OPEN_KEY, open ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadRightPanelOpen(): boolean {
+  try {
+    const v = localStorage.getItem(RIGHT_PANEL_OPEN_KEY);
+    if (v === null) return true;
+    return v !== '0' && v !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+export function saveRightPanelOpen(open: boolean): void {
+  try {
+    localStorage.setItem(RIGHT_PANEL_OPEN_KEY, open ? '1' : '0');
   } catch {
     /* ignore */
   }

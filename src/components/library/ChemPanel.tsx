@@ -2,7 +2,6 @@ import {
   ArrowRight,
   FlaskConical,
   Hexagon,
-  Library,
   Loader2,
   Pencil,
   Star,
@@ -47,8 +46,6 @@ const TABS: { id: TabId; label: string }[] = [
 ];
 
 export function ChemPanel() {
-  const setTool = useAppStore((s) => s.setTool);
-  const setLibraryTab = useAppStore((s) => s.setLibraryTab);
   const showToast = useAppStore((s) => s.showToast);
   const addUserIcons = useAppStore((s) => s.addUserIcons);
   const addFavorite = useAppStore((s) => s.addFavorite);
@@ -120,11 +117,6 @@ export function ChemPanel() {
       .filter((s) => s.source === 'recent' || s.source === 'favorite')
       .map((s) => ({ id: s.id, name: s.name, smiles: s.smiles, svg: s.svg, source: s.source }));
   }, [tab, aminoCards, library]);
-
-  const goLibrary = () => {
-    setTool('library');
-    setLibraryTab('library');
-  };
 
   const placeSvg = async (name: string, svg: string, smilesStr: string) => {
     const clean = stripOpaqueBackgroundRects(svg);
@@ -251,9 +243,6 @@ export function ChemPanel() {
       </div>
 
       <div style={{ padding: '0 12px 8px', display: 'grid', gap: 6 }}>
-        <button className="ba-btn" style={{ width: '100%' }} onClick={goLibrary}>
-          <Library size={14} /> Back to icon library
-        </button>
         <button
           className="ba-btn ba-btn-primary"
           style={{ width: '100%' }}

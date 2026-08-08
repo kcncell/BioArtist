@@ -3,9 +3,56 @@ import { useEffect, useRef, useState } from 'react';
 import type { LibraryIcon } from '../../data/catalog';
 import { dragHasIcon, parseIconDragData, setIconDragData } from '../../lib/iconDrag';
 import { placeLibraryIcon } from '../../lib/placeIcon';
-import { readSvgFiles, svgToThumbDataUrl } from '../../lib/svgImport';
+import { readSvgFiles, resolveIconThumbSrc, svgToThumbDataUrl } from '../../lib/svgImport';
 import { useAppStore } from '../../store/appStore';
 import { ContextMenu } from '../ui/ContextMenu';
+
+/** Thumbnail with fallback if the primary source fails to load. */
+function FavThumbImage({ icon }: { icon: LibraryIcon }) {
+  const primary = resolveIconThumbSrc(icon);
+  const [src, setSrc] = useState(primary);
+  const [triedAlt, setTriedAlt] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setSrc(resolveIconThumbSrc(icon));
+    setTriedAlt(false);
+    setFailed(false);
+  }, [icon.id, icon.path, icon.svgContent]);
+
+  if (!src || failed) {
+    return (
+      <span className="ba-fav-thumb-fallback" aria-hidden>
+        <Star size={16} />
+      </span>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt=""
+      draggable={false}
+      onError={() => {
+        if (!triedAlt && icon.svgContent) {
+          setTriedAlt(true);
+          try {
+            setSrc(svgToThumbDataUrl(icon.svgContent));
+            return;
+          } catch {
+            /* fall through */
+          }
+        }
+        if (!triedAlt && icon.path && src !== icon.path) {
+          setTriedAlt(true);
+          setSrc(icon.path);
+          return;
+        }
+        setFailed(true);
+      }}
+    />
+  );
+}
 
 export function FavoritesDock() {
   const favorites = useAppStore((s) => s.favorites);
@@ -40,11 +87,13 @@ export function FavoritesDock() {
 
   if (!favoritesDockOpen) return null;
 
+  /** Click-to-place near center in a free spot */
   const place = async (icon: LibraryIcon) => {
     try {
       await placeLibraryIcon(icon);
       showToast(`Placed “${icon.name}”`);
-    } catch {
+    } catch (err) {
+      console.error(err);
       showToast('Could not place favorite');
     }
   };
@@ -79,7 +128,6 @@ export function FavoritesDock() {
 
     const icon = parseIconDragData(e.dataTransfer);
     if (icon) {
-      // Don't re-toast if dragging a favorite onto itself
       if (favorites.some((f) => f.id === icon.id)) return;
       addFromIcon(icon);
       return;
@@ -131,14 +179,17 @@ export function FavoritesDock() {
   return (
     <div
       className={`ba-favorites-dock ${dragOver ? 'drag-over' : ''}`}
-      aria-label="Favorite clip arts — drop icons here, drag onto canvas"
+      aria-label="Favorite clip arts — click to place, drag onto canvas"
       onDragOver={onDragOver}
       onDragEnter={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={(e) => void onDrop(e)}
     >
       <div className="ba-favorites-label-col">
-        <div className="ba-favorites-label" title="Drag icons here · drag favorites onto canvas">
+        <div
+          className="ba-favorites-label"
+          title="Click to place near center · drag onto canvas · right-click to remove"
+        >
           <Star size={12} fill="currentColor" />
           Favorites
         </div>
@@ -159,7 +210,7 @@ export function FavoritesDock() {
             <strong>Drop to add favorite</strong>
           ) : (
             <>
-              Drag icons here · or right-click → <strong>Add to favorites</strong>
+              Drag icons here · or right-click canvas → <strong>Add to favorites</strong>
             </>
           )}
         </div>
@@ -171,16 +222,24 @@ export function FavoritesDock() {
               type="button"
               className="ba-fav-thumb"
               draggable
-              title={`${icon.name} · click or drag onto canvas · right-click to remove`}
+              title={`${icon.name} · click = place near center · drag onto canvas · right-click to remove`}
               onDragStart={(e) => {
                 didDragRef.current = true;
                 setIconDragData(e, icon);
+                // Custom drag image from thumb when possible
+                const img = (e.currentTarget as HTMLElement).querySelector('img');
+                if (img && img.complete && img.naturalWidth > 0) {
+                  try {
+                    e.dataTransfer.setDragImage(img, img.width / 2, img.height / 2);
+                  } catch {
+                    /* ignore */
+                  }
+                }
               }}
               onDragEnd={() => {
-                // Allow click again after a short beat
                 window.setTimeout(() => {
                   didDragRef.current = false;
-                }, 50);
+                }, 80);
               }}
               onClick={() => {
                 if (didDragRef.current) return;
@@ -193,13 +252,7 @@ export function FavoritesDock() {
               }}
             >
               <span className="ba-fav-thumb-img">
-                {icon.svgContent ? (
-                  <img src={svgToThumbDataUrl(icon.svgContent)} alt="" draggable={false} />
-                ) : icon.path ? (
-                  <img src={icon.path} alt="" draggable={false} />
-                ) : (
-                  <Star size={16} />
-                )}
+                <FavThumbImage icon={icon} />
               </span>
               <span className="ba-fav-thumb-name">{icon.name}</span>
             </button>

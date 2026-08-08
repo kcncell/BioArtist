@@ -7,7 +7,6 @@ import {
   computeFitScale,
   disposeCanvas,
   exportJSON,
-  fetchSvgText,
   fitToScreen,
   getLayers,
   getSelectionCount,
@@ -20,11 +19,15 @@ import {
   selectTargetAtEvent,
   setArtboardSize as setCanvasArtboard,
   setCanvasListeners,
+  setCanvasScrollElement,
   setZoom,
 } from '../../lib/canvasController';
 import { parseIconDragData } from '../../lib/iconDrag';
+import { placeLibraryIcon } from '../../lib/placeIcon';
 import { readSvgFiles } from '../../lib/svgImport';
 import { loadDraft, saveDraft, useAppStore } from '../../store/appStore';
+import { CanvasToolbar } from '../layout/CanvasToolbar';
+import { TextFloatingToolbar } from '../text/TextFloatingToolbar';
 import {
   CanvasContextMenu,
   type CanvasCtxMenuState,
@@ -35,6 +38,7 @@ export function FabricCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
+  const stageAreaRef = useRef<HTMLDivElement>(null);
   const setLayers = useAppStore((s) => s.setLayers);
   const setSelection = useAppStore((s) => s.setSelection);
   const setHistoryFlags = useAppStore((s) => s.setHistoryFlags);
@@ -50,6 +54,9 @@ export function FabricCanvas() {
   const artboardHeight = useAppStore((s) => s.artboardHeight);
   const showGrid = useAppStore((s) => s.showGrid);
   const columnGuides = useAppStore((s) => s.columnGuides);
+  const rowGuides = useAppStore((s) => s.rowGuides);
+  /** User zoom from store (CSS zoom; Fabric viewport stays 1) */
+  const zoom = useAppStore((s) => s.zoom);
   const spacePan = useRef(false);
   const panning = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
@@ -57,9 +64,9 @@ export function FabricCanvas() {
   const [ctxMenu, setCtxMenu] = useState<CanvasCtxMenuState | null>(null);
 
   const updateFitScale = useCallback(() => {
-    const el = workspaceRef.current;
+    const el = stageAreaRef.current || workspaceRef.current;
     if (!el) return;
-    // clientWidth/Height ignore scrollbars and match the grid cell after shrink
+    // clientWidth/Height ignore scrollbars and match the scrollport
     const width = el.clientWidth || el.getBoundingClientRect().width;
     const height = el.clientHeight || el.getBoundingClientRect().height;
     if (width < 8 || height < 8) return;
@@ -163,9 +170,15 @@ export function FabricCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Register scrollport for panBy / zoom anchoring
+  useEffect(() => {
+    setCanvasScrollElement(stageAreaRef.current);
+    return () => setCanvasScrollElement(null);
+  }, []);
+
   // Keep artboard visually fitted inside the workspace as the window resizes
   useEffect(() => {
-    const el = workspaceRef.current;
+    const el = stageAreaRef.current || workspaceRef.current;
     if (!el) return;
 
     updateFitScale();
@@ -194,17 +207,15 @@ export function FabricCanvas() {
   }, [artboardWidth, artboardHeight, updateFitScale]);
 
   const onWheel = (e: React.WheelEvent) => {
+    // ⌘/Ctrl + scroll → zoom (stage grows; scrollbars appear when larger than view)
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       const delta = e.deltaY > 0 ? -0.08 : 0.08;
-      setZoom(getZoom() + delta);
-    } else if (e.shiftKey) {
-      e.preventDefault();
-      panBy(-e.deltaY, 0);
-    } else {
-      // two-finger pan feel
-      panBy(-e.deltaX, -e.deltaY);
+      setZoom(getZoom() + delta, { clientX: e.clientX, clientY: e.clientY });
+      return;
     }
+    // Otherwise let the browser scroll the stage area natively (H + V scrollbars).
+    // Shift+wheel → horizontal scroll is handled by the browser on most platforms.
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -239,15 +250,9 @@ export function FabricCanvas() {
     const dragged = parseIconDragData(e.dataTransfer);
     if (dragged) {
       try {
-        if (dragged.path?.startsWith('data:image') && !dragged.path.includes('svg+xml')) {
-          await addImageFromDataUrl(dragged.path, { left, top, name: dragged.name });
-          return;
-        }
-        let svg = dragged.svgContent;
-        if (!svg && dragged.path && !dragged.path.startsWith('data:')) {
-          svg = await fetchSvgText(dragged.path);
-        }
-        if (svg) await addSvgToCanvas(svg, { left, top, name: dragged.name });
+        // Favorites / library drag — place under the cursor
+        await placeLibraryIcon(dragged, { left, top });
+        showToast(`Placed “${dragged.name}”`);
       } catch {
         showToast('Could not place icon');
       }
@@ -311,8 +316,10 @@ export function FabricCanvas() {
     }
   };
 
-  const stageW = Math.round(artboardWidth * fitScale);
-  const stageH = Math.round(artboardHeight * fitScale);
+  // Display scale = fit-into-window × user zoom. Stage box matches so overflow scrolls.
+  const displayScale = fitScale * Math.max(0.25, Math.min(3, zoom || 1));
+  const stageW = Math.round(artboardWidth * displayScale);
+  const stageH = Math.round(artboardHeight * displayScale);
 
   const onContextMenu = (e: React.MouseEvent) => {
     // Fallback for right-clicks that hit stage chrome / empty overlay (not fabric upper canvas)
@@ -344,58 +351,94 @@ export function FabricCanvas() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
     >
+      {/* Canvas-column tools only (Snap → Copy); wraps within this column */}
+      <CanvasToolbar />
+
       <div
-        className="ba-canvas-stage"
-        style={{ width: stageW, height: stageH }}
-        onContextMenu={onContextMenu}
+        ref={stageAreaRef}
+        className="ba-workspace-stage-area"
       >
+        {/* Spacer centers the stage when smaller than the view; scrolls when larger */}
         <div
-          ref={wrapRef}
-          className={`ba-canvas-wrap ${showGrid ? 'ba-grid' : ''}`}
+          className="ba-workspace-scroll-inner"
           style={{
-            width: artboardWidth,
-            height: artboardHeight,
-            transform: `scale(${fitScale})`,
-            position: 'relative',
+            minWidth: '100%',
+            minHeight: '100%',
+            width: stageW,
+            height: stageH,
           }}
         >
-          <canvas ref={canvasRef} />
-          {/* Imaginary vertical column guides (not exported) */}
-          {columnGuides >= 2 && (
-            <div className="ba-column-guides" aria-hidden>
-              {Array.from({ length: columnGuides - 1 }, (_, i) => {
-                const pct = ((i + 1) / columnGuides) * 100;
-                return (
-                  <div
-                    key={i}
-                    className="ba-column-guide"
-                    style={{ left: `${pct}%` }}
-                  />
-                );
-              })}
+          <div
+            className="ba-canvas-stage"
+            style={{ width: stageW, height: stageH }}
+            onContextMenu={onContextMenu}
+          >
+            {/* Anchored to artboard top edge; expands upward (never under Snap/Zoom bar) */}
+            <TextFloatingToolbar />
+            <div
+              ref={wrapRef}
+              className={`ba-canvas-wrap ${showGrid ? 'ba-grid' : ''}`}
+              style={{
+                width: artboardWidth,
+                height: artboardHeight,
+                transform: `scale(${displayScale})`,
+                position: 'relative',
+              }}
+            >
+              <canvas ref={canvasRef} />
+              {/* Layout guides — visual only, not exported; visibility follows Grid button */}
+              {showGrid && (columnGuides >= 2 || rowGuides >= 2) && (
+                <div className="ba-layout-guides" aria-hidden>
+                  {columnGuides >= 2 &&
+                    Array.from({ length: columnGuides - 1 }, (_, i) => {
+                      const pct = ((i + 1) / columnGuides) * 100;
+                      return (
+                        <div
+                          key={`c-${i}`}
+                          className="ba-layout-guide ba-layout-guide-col"
+                          style={{ left: `${pct}%` }}
+                        />
+                      );
+                    })}
+                  {rowGuides >= 2 &&
+                    Array.from({ length: rowGuides - 1 }, (_, i) => {
+                      const pct = ((i + 1) / rowGuides) * 100;
+                      return (
+                        <div
+                          key={`r-${i}`}
+                          className="ba-layout-guide ba-layout-guide-row"
+                          style={{ top: `${pct}%` }}
+                        />
+                      );
+                    })}
+                </div>
+              )}
+              {objectCount === 0 && (
+                <div className="ba-canvas-empty">
+                  <h2>Start your figure</h2>
+                  <p>
+                    Browse biology icons on the left, or import SVG / PNG into My Library. Drag onto
+                    the canvas to compose publication-style figures.
+                  </p>
+                  <div className="ba-canvas-empty-actions">
+                    <button
+                      className="ba-btn ba-btn-primary"
+                      onClick={() => setLibraryTab('library')}
+                    >
+                      Browse icons
+                    </button>
+                    <button className="ba-btn" onClick={() => setLibraryTab('uploads')}>
+                      <Upload size={14} /> Import assets
+                    </button>
+                  </div>
+                  <div className="ba-canvas-empty-hint">
+                    Scroll when zoomed · Space+drag to pan · ⌘/Ctrl+scroll to zoom · Favorites dock
+                    below
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-          {objectCount === 0 && (
-            <div className="ba-canvas-empty">
-              <h2>Start your figure</h2>
-              <p>
-                Browse biology icons on the left, or import SVG / PNG into My Library. Drag onto the
-                canvas to compose publication-style figures.
-              </p>
-              <div className="ba-canvas-empty-actions">
-                <button className="ba-btn ba-btn-primary" onClick={() => setLibraryTab('library')}>
-                  Browse icons
-                </button>
-                <button className="ba-btn" onClick={() => setLibraryTab('uploads')}>
-                  <Upload size={14} /> Import assets
-                </button>
-              </div>
-              <div className="ba-canvas-empty-hint">
-                Space+drag to pan · ⌘/Ctrl+scroll to zoom · Grid / Snap in the top bar · Favorites
-                dock below
-              </div>
-            </div>
-          )}
+          </div>
         </div>
       </div>
 

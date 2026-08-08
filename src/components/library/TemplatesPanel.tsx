@@ -1,7 +1,6 @@
 import {
   Bot,
   Copy,
-  Library,
   Pin,
   PinOff,
   Sparkles,
@@ -28,8 +27,6 @@ type ListItem =
 
 export function TemplatesPanel() {
   const showToast = useAppStore((s) => s.showToast);
-  const setTool = useAppStore((s) => s.setTool);
-  const setLibraryTab = useAppStore((s) => s.setLibraryTab);
   const userTemplates = useAppStore((s) => s.userTemplates);
   const pinnedTemplateIds = useAppStore((s) => s.pinnedTemplateIds);
   const addUserTemplate = useAppStore((s) => s.addUserTemplate);
@@ -77,11 +74,6 @@ export function TemplatesPanel() {
     const combined = [...users, ...builtins];
     return sortTemplatesByPin(combined, pinnedTemplateIds, (row) => row.item.id);
   }, [userTemplates, pinnedTemplateIds]);
-
-  const goLibrary = () => {
-    setTool('library');
-    setLibraryTab('library');
-  };
 
   const applyItem = async (row: ListItem) => {
     try {
@@ -141,11 +133,6 @@ export function TemplatesPanel() {
   return (
     <aside className="ba-left-panel">
       <div className="ba-panel-header">Templates</div>
-      <div style={{ padding: '0 12px 10px' }}>
-        <button className="ba-btn" style={{ width: '100%' }} onClick={goLibrary}>
-          <Library size={14} /> Back to icon library
-        </button>
-      </div>
 
       <div className="ba-panel-sub">
         Click a template to load it on the canvas. Right-click to pin or delete. Import a saved

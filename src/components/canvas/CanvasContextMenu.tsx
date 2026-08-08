@@ -1,11 +1,15 @@
 import {
   ArrowDownToLine,
   ArrowUpToLine,
+  Check,
   ClipboardCopy,
   ClipboardPaste,
   Copy,
+  Crop,
   Download,
+  Eraser,
   Group,
+  RotateCcw,
   Scissors,
   Star,
   Trash2,
@@ -13,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import {
+  beginCropMode,
   bringForward,
   bringToFront,
   copySelectionToClipboard,
@@ -20,12 +25,18 @@ import {
   deleteSelection,
   downloadSelectionSvg,
   duplicateSelection,
+  endCropMode,
   getSelectionCount,
   groupSelection,
   hasObjectClipboard,
+  isCropModeActive,
   pasteObjectClipboard,
+  removeSolidBackgroundFromSelection,
+  resetSelectionCrop,
   selectionAsLibraryIcon,
+  selectionIsCroppable,
   selectionIsGroup,
+  selectionIsRasterImage,
   sendBackward,
   sendToBack,
   ungroupSelection,
@@ -65,12 +76,18 @@ export function CanvasContextMenu({ menu, onClose }: Props) {
   const onObjectRef = useRef(false);
   const canGroupRef = useRef(false);
   const canUngroupRef = useRef(false);
+  const canRemoveBgRef = useRef(false);
+  const canCropRef = useRef(false);
+  const inCropModeRef = useRef(false);
 
   if (menu) {
     const count = getSelectionCount();
     onObjectRef.current = menu.onObject && count > 0;
     canGroupRef.current = count >= 2;
     canUngroupRef.current = selectionIsGroup();
+    canRemoveBgRef.current = selectionIsRasterImage();
+    canCropRef.current = selectionIsCroppable();
+    inCropModeRef.current = isCropModeActive();
   }
 
   useEffect(() => {
@@ -108,6 +125,9 @@ export function CanvasContextMenu({ menu, onClose }: Props) {
   const onObject = onObjectRef.current;
   const canGroup = canGroupRef.current;
   const canUngroup = canUngroupRef.current;
+  const canRemoveBg = canRemoveBgRef.current;
+  const canCrop = canCropRef.current;
+  const inCropMode = inCropModeRef.current;
 
   /** Run a sync canvas action, then close the menu. */
   const act = (label: string, fn: () => void) => {
@@ -359,6 +379,92 @@ export function CanvasContextMenu({ menu, onClose }: Props) {
           >
             <Download size={14} /> Save as SVG
           </button>
+
+          {canCrop && (
+            <>
+              <Sep />
+              {inCropMode ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  title="Finish cropping (keeps current crop)"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() =>
+                    act('Crop applied', () => {
+                      endCropMode();
+                    })
+                  }
+                >
+                  <Check size={14} /> Apply crop
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  role="menuitem"
+                  title="Crop from all four sides — drag the side handles"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() =>
+                    act('Crop mode — drag sides · Esc to finish', () => {
+                      const ok = beginCropMode();
+                      if (!ok) throw new Error('Not croppable');
+                    })
+                  }
+                >
+                  <Crop size={14} /> Crop
+                </button>
+              )}
+              <button
+                type="button"
+                role="menuitem"
+                title="Clear crop and show the full figure"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() =>
+                  act('Crop reset', () => {
+                    const ok = resetSelectionCrop();
+                    if (!ok) throw new Error('Could not reset crop');
+                  })
+                }
+              >
+                <RotateCcw size={14} /> Reset crop
+              </button>
+            </>
+          )}
+
+          {canRemoveBg && (
+            <>
+              <Sep />
+              <button
+                type="button"
+                role="menuitem"
+                title="Make near-white / solid background transparent (hard edges)"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      const result = await removeSolidBackgroundFromSelection({
+                        tolerance: 28,
+                        color: { r: 255, g: 255, b: 255 },
+                      });
+                      if (!result.ok) {
+                        showToast(result.error || 'Could not remove background');
+                      } else {
+                        showToast(
+                          `Background removed (${result.removed?.toLocaleString() ?? '?'} pixels)`,
+                        );
+                      }
+                    } catch (err) {
+                      console.error(err);
+                      showToast('Could not remove background');
+                    } finally {
+                      onClose();
+                    }
+                  })();
+                }}
+              >
+                <Eraser size={14} /> Remove white background
+              </button>
+            </>
+          )}
 
           <Sep />
           <button

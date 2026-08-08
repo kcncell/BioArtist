@@ -1,68 +1,95 @@
+/**
+ * Full-width app chrome (above rail + side panels + canvas).
+ * Left-aligned: logo · docs/name · size · New/Open/Save/Export · Theme/Opacity/Hue
+ * Wraps to a second full-width row when the window is narrow.
+ */
 import {
-  CircleHelp,
-  Columns3,
+  ChevronDown,
   Download,
+  FilePlus2,
   FolderOpen,
-  Grid3x3,
-  Group,
-  Redo2,
   Save,
-  Undo2,
-  Ungroup,
-  ZoomIn,
-  ZoomOut,
+  X,
 } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { exportJSON } from '../../lib/canvasController';
 import {
-  bringForward,
-  duplicateSelection,
-  exportJSON,
-  fitToScreen,
-  groupSelection,
-  importJSON,
-  redo,
-  sendBackward,
-  setArtboardSize as setCanvasArtboard,
-  setSnap,
-  undo,
-  ungroupSelection,
-  zoomBy,
-} from '../../lib/canvasController';
+  closeDocument,
+  openDocumentFromFile,
+  snapshotActiveDocument,
+  switchToDocument,
+} from '../../lib/documentManager';
 import { downloadText } from '../../lib/export';
 import { useAppStore } from '../../store/appStore';
-
-const ARTBOARDS = [
-  { id: 'slide', label: 'Slide 16:9', w: 960, h: 540 },
-  { id: 'figure', label: 'Figure', w: 900, h: 600 },
-  { id: 'square', label: 'Square', w: 800, h: 800 },
-  { id: 'poster', label: 'Poster', w: 1200, h: 800 },
-];
+import { NewDocumentDialog } from './NewDocumentDialog';
 
 export function TopBar() {
   const projectName = useAppStore((s) => s.projectName);
   const setProjectName = useAppStore((s) => s.setProjectName);
-  const canUndo = useAppStore((s) => s.canUndo);
-  const canRedo = useAppStore((s) => s.canRedo);
-  const zoom = useAppStore((s) => s.zoom);
   const setExportOpen = useAppStore((s) => s.setExportOpen);
-  const setHelpOpen = useAppStore((s) => s.setHelpOpen);
   const showToast = useAppStore((s) => s.showToast);
   const artboardWidth = useAppStore((s) => s.artboardWidth);
   const artboardHeight = useAppStore((s) => s.artboardHeight);
-  const setArtboardSize = useAppStore((s) => s.setArtboardSize);
-  const showGrid = useAppStore((s) => s.showGrid);
-  const setShowGrid = useAppStore((s) => s.setShowGrid);
-  const snapOn = useAppStore((s) => s.snapOn);
-  const setSnapOn = useAppStore((s) => s.setSnapOn);
-  const columnGuides = useAppStore((s) => s.columnGuides);
-  const setColumnGuides = useAppStore((s) => s.setColumnGuides);
   const glassOpacity = useAppStore((s) => s.glassOpacity);
   const setGlassOpacity = useAppStore((s) => s.setGlassOpacity);
   const glassHue = useAppStore((s) => s.glassHue);
   const setGlassHue = useAppStore((s) => s.setGlassHue);
   const themeMode = useAppStore((s) => s.themeMode);
   const setThemeMode = useAppStore((s) => s.setThemeMode);
+  const openDocuments = useAppStore((s) => s.openDocuments);
+  const activeDocumentId = useAppStore((s) => s.activeDocumentId);
+
+  const [newOpen, setNewOpen] = useState(false);
+  const [docsOpen, setDocsOpen] = useState(false);
+  const [docsMenuPos, setDocsMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const docsBtnRef = useRef<HTMLButtonElement>(null);
+  const docsMenuRef = useRef<HTMLDivElement>(null);
+
+  const closeDocs = useCallback(() => {
+    setDocsOpen(false);
+    setDocsMenuPos(null);
+  }, []);
+
+  const updateDocsMenuPos = useCallback(() => {
+    const btn = docsBtnRef.current;
+    if (!btn) return;
+    const r = btn.getBoundingClientRect();
+    const menuW = 260;
+    let left = r.left;
+    if (left + menuW > window.innerWidth - 8) left = Math.max(8, window.innerWidth - menuW - 8);
+    setDocsMenuPos({ top: r.bottom + 6, left });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!docsOpen) {
+      setDocsMenuPos(null);
+      return;
+    }
+    updateDocsMenuPos();
+    window.addEventListener('resize', updateDocsMenuPos);
+    window.addEventListener('scroll', updateDocsMenuPos, true);
+    return () => {
+      window.removeEventListener('resize', updateDocsMenuPos);
+      window.removeEventListener('scroll', updateDocsMenuPos, true);
+    };
+  }, [docsOpen, updateDocsMenuPos]);
+
+  useEffect(() => {
+    if (!docsOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeDocs();
+    };
+    document.addEventListener('keydown', onKey);
+    document.body.classList.add('ba-popover-blocking');
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.classList.remove('ba-popover-blocking');
+    };
+  }, [docsOpen, closeDocs]);
 
   const onSave = () => {
+    snapshotActiveDocument();
     const data = exportJSON();
     if (!data) return;
     const payload = {
@@ -88,12 +115,12 @@ export function TopBar() {
       try {
         const text = await file.text();
         const data = JSON.parse(text);
-        if (data.projectName) setProjectName(data.projectName);
-        if (data.artboard) {
-          setArtboardSize(data.artboard.width, data.artboard.height);
+        const doc = await openDocumentFromFile(data);
+        if (doc) {
+          showToast(`Opened “${doc.name}” as a new tab`);
+        } else {
+          showToast('Could not open project file');
         }
-        await importJSON(data);
-        showToast('Project loaded');
       } catch {
         showToast('Could not open project file');
       }
@@ -101,216 +128,201 @@ export function TopBar() {
     input.click();
   };
 
-  const artboardValue =
-    ARTBOARDS.find((a) => a.w === artboardWidth && a.h === artboardHeight)?.id || 'custom';
-
   return (
     <header className="ba-topbar">
-      <div className="ba-logo" title="BioArtist">
-        <div className="ba-logo-mark" aria-hidden>
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <circle cx="7" cy="7" r="5.5" stroke="white" strokeWidth="1.5" />
-            <circle cx="7" cy="7" r="2" fill="white" />
-          </svg>
+      <div className="ba-topbar-strip">
+        <div className="ba-logo" title="BioArtist">
+          <div className="ba-logo-mark" aria-hidden>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <circle cx="7" cy="7" r="5.5" stroke="white" strokeWidth="1.5" />
+              <circle cx="7" cy="7" r="2" fill="white" />
+            </svg>
+          </div>
+          <span className="ba-logo-text">BioArtist</span>
         </div>
-        <span className="ba-logo-text">BioArtist</span>
-      </div>
 
-      <input
-        className="ba-project-name"
-        value={projectName}
-        onChange={(e) => setProjectName(e.target.value)}
-        title="Project name"
-      />
-
-      <select
-        className="ba-artboard-select"
-        title="Artboard size"
-        value={artboardValue}
-        onChange={(e) => {
-          const preset = ARTBOARDS.find((a) => a.id === e.target.value);
-          if (!preset) return;
-          setArtboardSize(preset.w, preset.h);
-          setCanvasArtboard(preset.w, preset.h);
-          showToast(`Artboard ${preset.w}×${preset.h}`);
-        }}
-      >
-        {ARTBOARDS.map((a) => (
-          <option key={a.id} value={a.id}>
-            {a.label}
-          </option>
-        ))}
-        {artboardValue === 'custom' && (
-          <option value="custom">
-            Custom {artboardWidth}×{artboardHeight}
-          </option>
-        )}
-      </select>
-
-      <div className="ba-topbar-group" title="Grid & snap">
-        <button
-          className={`ba-btn ba-btn-icon ${showGrid ? 'active' : ''}`}
-          title="Show or hide grid"
-          onClick={() => {
-            setShowGrid(!showGrid);
-            showToast(showGrid ? 'Grid hidden' : 'Grid shown');
-          }}
-        >
-          <Grid3x3 size={15} />
-        </button>
-        <button
-          className={`ba-btn ba-btn-sm ${snapOn ? 'active' : ''}`}
-          title="Smart alignment guides"
-          onClick={() => {
-            const next = !snapOn;
-            setSnapOn(next);
-            setSnap(next);
-            showToast(next ? 'Alignment guides on' : 'Alignment guides off');
-          }}
-        >
-          Snap
-        </button>
-        <label className="ba-guides-columns" title="Column guides">
-          <Columns3 size={14} />
-          <select
-            className="ba-artboard-select"
-            value={columnGuides}
-            onChange={(e) => {
-              const n = Number(e.target.value);
-              setColumnGuides(n);
-              showToast(n === 0 ? 'Column guides off' : `${n} vertical columns`);
-            }}
-          >
-            <option value={0}>Cols</option>
-            <option value={2}>2</option>
-            <option value={3}>3</option>
-            <option value={4}>4</option>
-            <option value={5}>5</option>
-            <option value={6}>6</option>
-          </select>
-        </label>
-      </div>
-
-      <div className="ba-topbar-group">
-        <button className="ba-btn ba-btn-icon" title="Undo (⌘Z)" disabled={!canUndo} onClick={() => undo()}>
-          <Undo2 size={16} />
-        </button>
-        <button className="ba-btn ba-btn-icon" title="Redo (⌘⇧Z)" disabled={!canRedo} onClick={() => redo()}>
-          <Redo2 size={16} />
-        </button>
-      </div>
-
-      <div className="ba-topbar-group">
-        <button className="ba-btn ba-btn-icon" title="Zoom out" onClick={() => zoomBy(-0.1)}>
-          <ZoomOut size={16} />
-        </button>
-        <button
-          className="ba-btn ba-btn-sm"
-          title="Fit artboard to window"
-          onClick={() => {
-            fitToScreen();
-            window.dispatchEvent(new Event('resize'));
-            showToast('Fitted to window');
-          }}
-        >
-          {Math.round(zoom * 100)}%
-        </button>
-        <button className="ba-btn ba-btn-icon" title="Zoom in" onClick={() => zoomBy(0.1)}>
-          <ZoomIn size={16} />
-        </button>
-      </div>
-
-      <div className="ba-topbar-group">
-        <button className="ba-btn ba-btn-icon" title="Group (⌘G)" onClick={() => groupSelection()}>
-          <Group size={16} />
-        </button>
-        <button className="ba-btn ba-btn-icon" title="Ungroup" onClick={() => ungroupSelection()}>
-          <Ungroup size={16} />
-        </button>
-        <button className="ba-btn ba-btn-sm" title="Bring forward" onClick={() => bringForward()}>
-          Fwd
-        </button>
-        <button className="ba-btn ba-btn-sm" title="Send backward" onClick={() => sendBackward()}>
-          Back
-        </button>
-        <button className="ba-btn ba-btn-sm" title="Copy selection (⌘D)" onClick={() => duplicateSelection()}>
-          Copy
-        </button>
-      </div>
-
-      <div className="ba-topbar-spacer" aria-hidden />
-
-      <div className="ba-glass-controls" title="Liquid glass theme">
-        <div className="ba-theme-toggle" role="group" aria-label="App theme">
+        <div className="ba-docs-picker">
           <button
+            ref={docsBtnRef}
             type="button"
-            className={`ba-theme-toggle-btn ${themeMode === 'light' ? 'active' : ''}`}
-            onClick={() => setThemeMode('light')}
-            title="Light frosted glass"
+            className="ba-docs-picker-btn"
+            title="Open figures"
+            aria-haspopup="listbox"
+            aria-expanded={docsOpen}
+            onClick={() => setDocsOpen((v) => !v)}
           >
-            Light
+            <ChevronDown size={14} />
+            <span className="ba-docs-picker-count">{openDocuments.length}</span>
           </button>
+          {docsOpen &&
+            docsMenuPos &&
+            createPortal(
+              <>
+                <div
+                  className="ba-popover-scrim"
+                  aria-hidden
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    closeDocs();
+                  }}
+                />
+                <div
+                  ref={docsMenuRef}
+                  className="ba-docs-menu ba-docs-menu--portal"
+                  role="listbox"
+                  aria-label="Open figures"
+                  style={{ top: docsMenuPos.top, left: docsMenuPos.left }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <div className="ba-docs-menu-head">Open figures</div>
+                  {openDocuments.map((d) => (
+                    <div
+                      key={d.id}
+                      className={`ba-docs-menu-item ${d.id === activeDocumentId ? 'active' : ''}`}
+                    >
+                      <button
+                        type="button"
+                        className="ba-docs-menu-select"
+                        role="option"
+                        aria-selected={d.id === activeDocumentId}
+                        onClick={() => {
+                          void switchToDocument(d.id).then((ok) => {
+                            if (ok) showToast(`Switched to “${d.name}”`);
+                            closeDocs();
+                          });
+                        }}
+                      >
+                        <span className="ba-docs-menu-name">{d.name}</span>
+                        <span className="ba-docs-menu-size">
+                          {d.artboardWidth}×{d.artboardHeight}
+                        </span>
+                      </button>
+                      {openDocuments.length > 1 && (
+                        <button
+                          type="button"
+                          className="ba-docs-menu-close"
+                          title="Close figure"
+                          aria-label={`Close ${d.name}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void closeDocument(d.id).then((ok) => {
+                              if (ok) showToast('Figure closed');
+                              else showToast('Cannot close the last figure');
+                            });
+                          }}
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    className="ba-docs-menu-new"
+                    onClick={() => {
+                      closeDocs();
+                      setNewOpen(true);
+                    }}
+                  >
+                    <FilePlus2 size={14} /> New blank canvas…
+                  </button>
+                </div>
+              </>,
+              document.body,
+            )}
+          <input
+            className="ba-project-name"
+            value={projectName}
+            onChange={(e) => setProjectName(e.target.value)}
+            title="Figure name"
+            aria-label="Figure name"
+          />
+        </div>
+
+        <span className="ba-topbar-size-chip" title="Current canvas size">
+          {artboardWidth}×{artboardHeight}
+        </span>
+
+        <div className="ba-topbar-group ba-topbar-file-actions">
           <button
-            type="button"
-            className={`ba-theme-toggle-btn ${themeMode === 'dark' ? 'active' : ''}`}
-            onClick={() => setThemeMode('dark')}
-            title="Dark liquid glass"
+            className="ba-btn"
+            title="New blank canvas (does not close open figures)"
+            onClick={() => setNewOpen(true)}
           >
-            Dark
+            <FilePlus2 size={15} />
+            <span className="ba-topbar-label">New</span>
+          </button>
+          <button className="ba-btn" title="Open project as a new tab" onClick={onOpen}>
+            <FolderOpen size={15} />
+            <span className="ba-topbar-label">Open</span>
+          </button>
+          <button className="ba-btn" title="Save project (⌘S)" onClick={onSave}>
+            <Save size={15} />
+            <span className="ba-topbar-label">Save</span>
+          </button>
+          <button className="ba-btn" title="Export (⌘E)" onClick={() => setExportOpen(true)}>
+            <Download size={15} />
+            <span className="ba-topbar-label">Export</span>
           </button>
         </div>
-        <div className="ba-glass-control-divider" aria-hidden />
-        <label className="ba-glass-slider">
-          <span className="ba-glass-slider-head">
-            <span>Opacity</span>
-            <span>{Math.round(glassOpacity * 100)}%</span>
-          </span>
-          <input
-            type="range"
-            min={0}
-            max={0.5}
-            step={0.01}
-            value={glassOpacity}
-            onChange={(e) => setGlassOpacity(Number(e.target.value))}
-            aria-label="Glass opacity 0 to 50 percent"
-          />
-        </label>
-        <div className="ba-glass-control-divider" aria-hidden />
-        <label className="ba-glass-slider">
-          <span className="ba-glass-slider-head">
-            <span>Hue</span>
-            <span>{glassHue}°</span>
-          </span>
-          <input
-            type="range"
-            className="ba-glass-hue"
-            min={0}
-            max={359}
-            step={1}
-            value={glassHue}
-            onChange={(e) => setGlassHue(Number(e.target.value))}
-            aria-label="Glass hue tint"
-          />
-        </label>
+
+        <div className="ba-glass-controls" title="Liquid glass theme">
+          <div className="ba-theme-toggle" role="group" aria-label="App theme">
+            <button
+              type="button"
+              className={`ba-theme-toggle-btn ${themeMode === 'light' ? 'active' : ''}`}
+              onClick={() => setThemeMode('light')}
+              title="Light frosted glass"
+            >
+              Light
+            </button>
+            <button
+              type="button"
+              className={`ba-theme-toggle-btn ${themeMode === 'dark' ? 'active' : ''}`}
+              onClick={() => setThemeMode('dark')}
+              title="Dark liquid glass"
+            >
+              Dark
+            </button>
+          </div>
+          <div className="ba-glass-control-divider" aria-hidden />
+          <label className="ba-glass-slider">
+            <span className="ba-glass-slider-head">
+              <span>Opacity</span>
+              <span>{Math.round(glassOpacity * 100)}%</span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={0.5}
+              step={0.01}
+              value={glassOpacity}
+              onChange={(e) => setGlassOpacity(Number(e.target.value))}
+              aria-label="Glass opacity 0 to 50 percent"
+            />
+          </label>
+          <div className="ba-glass-control-divider" aria-hidden />
+          <label className="ba-glass-slider">
+            <span className="ba-glass-slider-head">
+              <span>Hue</span>
+              <span>{glassHue}°</span>
+            </span>
+            <input
+              type="range"
+              className="ba-glass-hue"
+              min={0}
+              max={359}
+              step={1}
+              value={glassHue}
+              onChange={(e) => setGlassHue(Number(e.target.value))}
+              aria-label="Glass hue tint"
+            />
+          </label>
+        </div>
       </div>
 
-      <div className="ba-topbar-group">
-        <button className="ba-btn ba-btn-icon" title="Shortcuts (?)" onClick={() => setHelpOpen(true)}>
-          <CircleHelp size={16} />
-        </button>
-        <button className="ba-btn" title="Open project" onClick={onOpen}>
-          <FolderOpen size={15} />
-          <span className="ba-topbar-label">Open</span>
-        </button>
-        <button className="ba-btn" title="Save project (⌘S)" onClick={onSave}>
-          <Save size={15} />
-          <span className="ba-topbar-label">Save</span>
-        </button>
-        <button className="ba-btn ba-btn-primary" title="Export (⌘E)" onClick={() => setExportOpen(true)}>
-          <Download size={15} />
-          <span className="ba-topbar-label">Export</span>
-        </button>
-      </div>
+      <NewDocumentDialog open={newOpen} onClose={() => setNewOpen(false)} />
     </header>
   );
 }

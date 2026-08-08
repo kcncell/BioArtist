@@ -19,12 +19,20 @@ import {
 import { readSvgFiles } from '../../lib/svgImport';
 import { useAppStore } from '../../store/appStore';
 import {
+  IconChatGPT,
+  IconClaude,
+  IconGemini,
+  IconGrok,
+} from './AiBrandIcons';
+import {
   EXTERNAL_ART_SOURCES,
   ExternalArtDialog,
   openExternalArtTarget,
   type ExternalArtSourceKey,
   type ExternalArtTarget,
 } from './ExternalArtDialog';
+
+export type PackCardsMode = 'full' | 'bioicons' | 'nih' | 'servier' | 'mcp';
 
 interface Props {
   bioicons: PackManifest | null;
@@ -33,6 +41,10 @@ interface Props {
   onShelfChange: (s: 'imports' | 'bioicons' | 'nih') => void;
   onPacksChanged: () => void;
   onMcpSynced?: () => void;
+  /** When set, only render that pack’s card (rail tool dedicated view). */
+  mode?: PackCardsMode;
+  /** Optional folder name applied to Servier / bulk imports */
+  importFolder?: string;
 }
 
 export function PackCards({
@@ -42,6 +54,8 @@ export function PackCards({
   onShelfChange,
   onPacksChanged,
   onMcpSynced,
+  mode = 'full',
+  importFolder,
 }: Props) {
   const showToast = useAppStore((s) => s.showToast);
   const addUserIcons = useAppStore((s) => s.addUserIcons);
@@ -70,13 +84,19 @@ export function PackCards({
     />
   );
 
-  /** Hide full pack cards while browsing so the icon grid is visible. */
-  if (activeShelf === 'bioicons' && bioicons) {
+  const dedicated = mode !== 'full';
+
+  /** Compact bar while browsing a pack so the icon grid has room. */
+  if (activeShelf === 'bioicons' && bioicons && (mode === 'full' || mode === 'bioicons')) {
     return (
       <>
         <div className="ba-pack-browse-bar">
-          <button className="ba-btn ba-btn-sm" type="button" onClick={() => onShelfChange('imports')}>
-            ← Packs
+          <button
+            className="ba-btn ba-btn-sm"
+            type="button"
+            onClick={() => onShelfChange('imports')}
+          >
+            {dedicated ? 'Manage' : '← Packs'}
           </button>
           <strong>Bioicons</strong>
           <span className="ba-pack-meta" style={{ margin: 0 }}>
@@ -96,12 +116,16 @@ export function PackCards({
     );
   }
 
-  if (activeShelf === 'nih' && nih) {
+  if (activeShelf === 'nih' && nih && (mode === 'full' || mode === 'nih')) {
     return (
       <>
         <div className="ba-pack-browse-bar">
-          <button className="ba-btn ba-btn-sm" type="button" onClick={() => onShelfChange('imports')}>
-            ← Packs
+          <button
+            className="ba-btn ba-btn-sm"
+            type="button"
+            onClick={() => onShelfChange('imports')}
+          >
+            {dedicated ? 'Manage' : '← Packs'}
           </button>
           <strong>NIH BioArt</strong>
           <span className="ba-pack-meta" style={{ margin: 0 }}>
@@ -207,10 +231,25 @@ export function PackCards({
       );
 
       let n = 0;
+      const folder =
+        importFolder?.trim() ||
+        'Servier Medical Art';
       if (svgFiles.length) {
-        const icons = await readSvgFiles(svgFiles);
+        const icons = await readSvgFiles(svgFiles, {
+          folder,
+          source: 'servier',
+        });
         if (icons.length) {
-          await addUserIcons(icons);
+          await addUserIcons(
+            icons.map((i) => ({
+              ...i,
+              author: i.author || 'Servier Medical Art (imported)',
+              licenseLabel: i.licenseLabel || 'CC BY 4.0 — credit required',
+              attributionRequired: true,
+              source: 'servier' as const,
+            })),
+            { stayOnTool: dedicated },
+          );
           n += icons.length;
         }
       }
@@ -222,18 +261,22 @@ export function PackCards({
           r.readAsDataURL(file);
         });
         const base = file.name.replace(/\.[^.]+$/, '');
-        await addUserIcons([
-          {
-            id: `user/servier-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            name: base.replace(/[_-]+/g, ' '),
-            category: 'symbols',
-            path: dataUrl,
-            source: 'user',
-            author: 'Servier Medical Art (imported)',
-            licenseLabel: 'CC BY 4.0 — credit required',
-            attributionRequired: true,
-          },
-        ]);
+        await addUserIcons(
+          [
+            {
+              id: `user/servier-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              name: base.replace(/[_-]+/g, ' '),
+              category: 'symbols',
+              path: dataUrl,
+              source: 'servier',
+              folder,
+              author: 'Servier Medical Art (imported)',
+              licenseLabel: 'CC BY 4.0 — credit required',
+              attributionRequired: true,
+            },
+          ],
+          { stayOnTool: dedicated },
+        );
         n += 1;
       }
 
@@ -253,41 +296,65 @@ export function PackCards({
     }
   };
 
+  const showAi = mode === 'full';
+  const showBio = mode === 'full' || mode === 'bioicons';
+  const showNih = mode === 'full' || mode === 'nih';
+  const showServier = mode === 'full' || mode === 'servier';
+  const showMcp = mode === 'full' || mode === 'mcp';
+
   return (
     <div className="ba-pack-cards">
-      {/* MCP — always visible at top of My Library packs */}
-      <div className="ba-pack-card ba-mcp-card">
+      {/* AI image tools — only in legacy full pack list */}
+      {showAi && (
+      <div className="ba-pack-card ba-pack-card--ai">
         <div className="ba-pack-card-head">
-          <Sparkles size={18} color="var(--ba-accent)" />
+          <ImagePlus size={18} color="var(--ba-accent)" />
           <div>
-            <strong>MCP inbox</strong>
-            <span>Desktop AI SVGs → My Library</span>
+            <strong>AI image tools</strong>
+            <span>Simple lab icons · not anatomy</span>
           </div>
         </div>
         <p className="ba-pack-meta">
-          After <code>bioartist-mcp</code> writes icons to <code>public/mcp-inbox/</code>, sync them
-          here in one click (same idea as Bioicons pack).
+          Opens ChatGPT, Claude, Gemini, or Grok in a new tab (your login). Best for basic icons
+          (pipette, plate, plate reader). AI can make mistakes — for professional medical art use
+          Bioicons / NIH / Servier. Generate → download or copy → <strong>Import</strong> or{' '}
+          <kbd>⌘V</kbd>. Example prompts appear after you click a tool.
         </p>
-        <div className="ba-pack-actions">
+        <div className="ba-ai-tool-links">
           <button
-            className="ba-btn ba-btn-primary ba-btn-sm"
-            disabled={busy === 'mcp'}
-            onClick={() => void syncMcp()}
+            type="button"
+            className="ba-ai-brand-btn ba-ai-brand-btn--chatgpt"
+            onClick={() => requestOpenExternal('chatgpt')}
           >
-            {busy === 'mcp' ? (
-              <>
-                <Loader2 size={14} className="ba-spin" /> Syncing…
-              </>
-            ) : (
-              <>
-                <Sparkles size={14} /> Sync MCP inbox
-              </>
-            )}
+            <IconChatGPT /> ChatGPT
+          </button>
+          <button
+            type="button"
+            className="ba-ai-brand-btn ba-ai-brand-btn--claude"
+            onClick={() => requestOpenExternal('claude')}
+          >
+            <IconClaude /> Claude
+          </button>
+          <button
+            type="button"
+            className="ba-ai-brand-btn ba-ai-brand-btn--gemini"
+            onClick={() => requestOpenExternal('gemini')}
+          >
+            <IconGemini /> Gemini
+          </button>
+          <button
+            type="button"
+            className="ba-ai-brand-btn ba-ai-brand-btn--grok"
+            onClick={() => requestOpenExternal('grok')}
+          >
+            <IconGrok /> Grok
           </button>
         </div>
       </div>
+      )}
 
       {/* Bioicons */}
+      {showBio && (
       <div className={`ba-pack-card ${activeShelf === 'bioicons' && bioicons ? 'active' : ''}`}>
         <div className="ba-pack-card-head">
           <Package size={18} color="var(--ba-accent)" />
@@ -393,8 +460,10 @@ export function PackCards({
           </>
         )}
       </div>
+      )}
 
       {/* NIH BioArt */}
+      {showNih && (
       <div className={`ba-pack-card ${activeShelf === 'nih' && nih ? 'active' : ''}`}>
         <div className="ba-pack-card-head">
           <Package size={18} color="#1d4ed8" />
@@ -495,8 +564,10 @@ export function PackCards({
           }}
         />
       </div>
+      )}
 
       {/* Servier Medical Art */}
+      {showServier && (
       <div className="ba-pack-card">
         <div className="ba-pack-card-head">
           <Package size={18} color="#0d9488" />
@@ -554,55 +625,43 @@ export function PackCards({
           }}
         />
       </div>
+      )}
 
-      {/* AI image tools — A–Z buttons; caution + prompts in dialog */}
-      <div className="ba-pack-card ba-pack-card--ai">
+      {/* MCP inbox — My Library or full list */}
+      {showMcp && (
+      <div className="ba-pack-card ba-mcp-card">
         <div className="ba-pack-card-head">
-          <ImagePlus size={18} color="var(--ba-accent)" />
+          <Sparkles size={18} color="var(--ba-accent)" />
           <div>
-            <strong>AI image tools</strong>
-            <span>Simple lab icons · not anatomy</span>
+            <strong>MCP inbox</strong>
+            <span>Desktop AI SVGs → My Library</span>
           </div>
         </div>
         <p className="ba-pack-meta">
-          Opens ChatGPT, Claude, Gemini, or Grok in a new tab (your login). Best for basic icons
-          (pipette, plate, plate reader). AI can make mistakes — for professional medical art use
-          Bioicons / NIH / Servier. Generate → download or copy → <strong>Import</strong> or{' '}
-          <kbd>⌘V</kbd>. Example prompts appear after you click a tool.
+          After <code>bioartist-mcp</code> writes icons to <code>public/mcp-inbox/</code>, sync them
+          here in one click (same idea as Bioicons pack).
         </p>
         <div className="ba-pack-actions">
           <button
-            type="button"
-            className="ba-btn ba-btn-sm"
-            onClick={() => requestOpenExternal('chatgpt')}
+            className="ba-btn ba-btn-primary ba-btn-sm"
+            disabled={busy === 'mcp'}
+            onClick={() => void syncMcp()}
           >
-            <ExternalLink size={13} /> ChatGPT
-          </button>
-          <button
-            type="button"
-            className="ba-btn ba-btn-sm"
-            onClick={() => requestOpenExternal('claude')}
-          >
-            <ExternalLink size={13} /> Claude
-          </button>
-          <button
-            type="button"
-            className="ba-btn ba-btn-sm"
-            onClick={() => requestOpenExternal('gemini')}
-          >
-            <ExternalLink size={13} /> Gemini
-          </button>
-          <button
-            type="button"
-            className="ba-btn ba-btn-sm"
-            onClick={() => requestOpenExternal('grok')}
-          >
-            <ExternalLink size={13} /> Grok
+            {busy === 'mcp' ? (
+              <>
+                <Loader2 size={14} className="ba-spin" /> Syncing…
+              </>
+            ) : (
+              <>
+                <Sparkles size={14} /> Sync MCP inbox
+              </>
+            )}
           </button>
         </div>
       </div>
+      )}
 
-      {(bioicons || nih) && (
+      {mode === 'full' && (bioicons || nih) && (
         <div className="ba-shelf-tabs">
           <button
             className={`ba-chip ${activeShelf === 'imports' ? 'active' : ''}`}

@@ -16,13 +16,18 @@ export interface LibraryIcon {
   category: string;
   path: string;
   svgContent?: string;
-  source?: 'builtin' | 'user' | 'bioicons' | 'nih' | 'mcp';
+  source?: 'builtin' | 'user' | 'bioicons' | 'nih' | 'mcp' | 'servier';
   license?: string;
   licenseLabel?: string;
   licenseUrl?: string;
   author?: string;
   attributionRequired?: boolean;
   pack?: string;
+  /**
+   * User organization category in My Library (e.g. “BioArt 649”, “Lab SVGs”).
+   * Field name kept as `folder` for storage compatibility; UI calls it Category.
+   */
+  folder?: string;
 }
 
 export const CATEGORIES: { id: IconCategory; label: string }[] = [
@@ -41,12 +46,28 @@ export function isMcpIcon(icon: LibraryIcon): boolean {
   return icon.source === 'mcp' || icon.id.startsWith('mcp/');
 }
 
-/** User / MCP / pasted icons can be deleted; built-in and CDN pack catalogs cannot. */
+/** User / MCP / imported icons can be deleted; built-in & CDN pack catalogs cannot. */
 export function isRemovableLibraryIcon(icon: LibraryIcon): boolean {
-  if (icon.source === 'builtin' || icon.source === 'bioicons') return false;
-  if (icon.pack === 'bioicons') return false;
-  if (icon.source === 'user' || icon.source === 'mcp' || icon.source === 'nih') return true;
-  // pasted / imported without source but with svg content
+  if (icon.source === 'builtin') return false;
+  // Installed Bioicons CDN catalog (path only, no local content)
+  if (
+    icon.pack === 'bioicons' &&
+    !icon.svgContent &&
+    icon.path &&
+    !icon.path.startsWith('data:')
+  ) {
+    return false;
+  }
+  // Personal imports into My Library / Bioicons / NIH / SMA panels
+  if (
+    icon.source === 'user' ||
+    icon.source === 'mcp' ||
+    icon.source === 'nih' ||
+    icon.source === 'servier' ||
+    icon.source === 'bioicons'
+  ) {
+    return true;
+  }
   if (icon.svgContent || icon.path.startsWith('data:')) return true;
   return false;
 }

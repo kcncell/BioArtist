@@ -1,4 +1,6 @@
+import { ChevronLeft, ChevronRight, PanelRight } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useAppStore } from '../../store/appStore';
 import { LayersPanel } from '../layers/LayersPanel';
 import { PropertiesPanel } from '../properties/PropertiesPanel';
 
@@ -36,6 +38,8 @@ export function RightPanel() {
   const dragging = useRef(false);
   const startY = useRef(0);
   const startPct = useRef(DEFAULT_PROPS_PCT);
+  const open = useAppStore((s) => s.rightPanelOpen);
+  const setRightPanelOpen = useAppStore((s) => s.setRightPanelOpen);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -91,11 +95,38 @@ export function RightPanel() {
     };
   }, []);
 
+  if (!open) {
+    return (
+      <aside className="ba-right-panel ba-right-panel-collapsed" aria-hidden>
+        <button
+          type="button"
+          className="ba-panel-expand-tab ba-panel-expand-tab-right"
+          title="Show properties & layers"
+          aria-label="Show right panel"
+          onClick={() => setRightPanelOpen(true)}
+        >
+          <ChevronLeft size={14} strokeWidth={2.25} />
+          <PanelRight size={16} strokeWidth={1.75} />
+        </button>
+      </aside>
+    );
+  }
+
   const propsCollapsed = propsPct <= MIN_PROPS_PCT + 0.5;
   const layersCollapsed = propsPct >= MAX_PROPS_PCT - 0.5;
 
   return (
     <aside className="ba-right-panel" ref={panelRef}>
+      <button
+        type="button"
+        className="ba-panel-collapse-btn ba-panel-collapse-right"
+        title="Hide right panel"
+        aria-label="Hide right panel"
+        onClick={() => setRightPanelOpen(false)}
+      >
+        <ChevronRight size={16} strokeWidth={2.25} />
+      </button>
+
       <div
         className={`ba-right-pane ba-right-pane-props ${propsCollapsed ? 'collapsed' : ''}`}
         style={{ flex: `0 0 ${propsPct}%` }}

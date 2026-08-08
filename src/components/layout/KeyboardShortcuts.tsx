@@ -1,13 +1,17 @@
 import { useEffect } from 'react';
 import {
   addText,
+  cancelTextBoxDraw,
   copySelectionToClipboard,
   cutSelectionToClipboard,
   deleteSelection,
   duplicateSelection,
+  endCropMode,
   exportJSON,
   groupSelection,
   hasObjectClipboard,
+  isCropModeActive,
+  isTextBoxDrawActive,
   pasteObjectClipboard,
   redo,
   undo,
@@ -165,6 +169,18 @@ export function KeyboardShortcuts() {
       }
 
       if (!typing && e.key === 'Escape') {
+        if (isTextBoxDrawActive()) {
+          e.preventDefault();
+          cancelTextBoxDraw();
+          useAppStore.getState().showToast('Text box draw cancelled');
+          return;
+        }
+        if (isCropModeActive()) {
+          e.preventDefault();
+          endCropMode();
+          useAppStore.getState().showToast('Crop applied');
+          return;
+        }
         useAppStore.getState().setHelpOpen(false);
         useAppStore.getState().setExportOpen(false);
       }

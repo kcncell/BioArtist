@@ -1,34 +1,15 @@
-import { ArrowRight, FlaskConical, Library, Type } from 'lucide-react';
+import { ArrowRight, FlaskConical, Square, Type } from 'lucide-react';
 import {
   addLine,
   addReactionArrowWithReagents,
   addReagentsToSelectedArrow,
   addShape,
-  addText,
+  addTextLabel,
+  beginTextBoxDraw,
 } from '../../lib/canvasController';
 import { LINE_ITEMS, SHAPE_ITEMS } from '../../data/shapesCatalog';
 import { useAppStore } from '../../store/appStore';
 import type { LineKind, ShapeKind } from '../../types';
-
-function BackToLibraryButton() {
-  const setTool = useAppStore((s) => s.setTool);
-  const setLibraryTab = useAppStore((s) => s.setLibraryTab);
-
-  return (
-    <div style={{ padding: '0 12px 10px' }}>
-      <button
-        className="ba-btn"
-        style={{ width: '100%' }}
-        onClick={() => {
-          setTool('library');
-          setLibraryTab('library');
-        }}
-      >
-        <Library size={14} /> Back to icon library
-      </button>
-    </div>
-  );
-}
 
 export function ShapeLinePanel() {
   const tool = useAppStore((s) => s.tool);
@@ -39,25 +20,53 @@ export function ShapeLinePanel() {
     return (
       <aside className="ba-left-panel">
         <div className="ba-panel-header">Text</div>
-        <BackToLibraryButton />
         <div className="ba-panel-sub">
-          Add labels and captions. Double-click text on the canvas to edit. Style in Properties.
+          Labels are free text. Text boxes are click-drag rectangles with a border — style border,
+          fill, and fonts in Properties.
         </div>
-        <div style={{ padding: '0 12px' }}>
+        <div
+          style={{
+            padding: '0 12px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            alignItems: 'stretch',
+          }}
+        >
           <button
-            className="ba-btn ba-btn-primary"
-            style={{ width: '100%', height: 36 }}
+            type="button"
+            className="ba-btn ba-btn-primary ba-text-tool-btn"
             onClick={() => {
-              addText('Label');
-              showToast('Text added — start typing');
+              addTextLabel('Label');
+              showToast('Text label added — start typing');
             }}
           >
-            <Type size={15} /> Add text label
+            <Type size={15} aria-hidden />
+            <span>Add Text Label</span>
+          </button>
+          <button
+            type="button"
+            className="ba-btn ba-btn-primary ba-text-tool-btn"
+            onClick={() => {
+              beginTextBoxDraw();
+              showToast('Click and drag on the canvas to draw a text box · Esc to cancel');
+            }}
+          >
+            <Square size={15} aria-hidden />
+            <span>Add Text Box</span>
           </button>
         </div>
         <div className="ba-empty">
-          Tip: press <strong>T</strong> anytime to add text. Click Text again on the rail to return
-          to the icon library.
+          <p style={{ margin: '0 0 8px' }}>
+            <strong>Text Label</strong> — plain caption, no border.
+          </p>
+          <p style={{ margin: '0 0 8px' }}>
+            <strong>Text Box</strong> — drag any size; default black outline. Control border
+            thickness/color, fill, and Fit to text in Properties. Same font options as labels.
+          </p>
+          <p style={{ margin: 0 }}>
+            Tip: press <strong>T</strong> for a quick label. Double-click text to edit.
+          </p>
         </div>
       </aside>
     );
@@ -67,7 +76,6 @@ export function ShapeLinePanel() {
     return (
       <aside className="ba-left-panel">
         <div className="ba-panel-header">Shapes</div>
-        <BackToLibraryButton />
         <div className="ba-panel-sub">Click a shape to place it on the canvas.</div>
         <div className="ba-mini-grid">
           {SHAPE_ITEMS.map((s) => (
@@ -105,7 +113,6 @@ export function ShapeLinePanel() {
     return (
       <aside className="ba-left-panel">
         <div className="ba-panel-header">Lines & arrows</div>
-        <BackToLibraryButton />
 
         <div className="ba-panel-sub" style={{ paddingTop: 0 }}>
           Reaction scheme — start here
