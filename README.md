@@ -219,8 +219,51 @@ Dropping SVG files onto the canvas also adds them to My Library and places the f
 | Command        | Description              |
 |----------------|--------------------------|
 | `npm run dev`  | Development server       |
-| `npm run build`| Production build         |
+| `npm run build`| Production web build     |
 | `npm run preview` | Preview production build |
+| `npm run electron:dev` | Build + open desktop app (dev) |
+| `npm run electron:pack:mac:arm` | macOS **.dmg** (Apple Silicon) → `release/mac/` |
+| `npm run electron:pack:mac` | macOS **.dmg** (arm64 + Intel) → `release/mac/` |
+| `npm run electron:pack:win` | Windows **.exe** installer → `release/win/` |
+
+## Desktop apps (Electron)
+
+Installable apps package the full BioArtist web build (icons, Chem Studio assets, RDKit WASM, etc.) inside Electron.
+
+| Platform | Output folder | Artifact |
+|----------|---------------|----------|
+| macOS | `release/mac/` | `BioArtist-*-mac-arm64.dmg` / `*-x64.dmg` |
+| Windows | `release/win/` | `BioArtist-*-win-x64-Setup.exe` |
+
+### Build on this machine
+
+```bash
+# 1) Install deps (once)
+npm install
+
+# 2a) macOS DMG (Apple Silicon — fastest on M1/M2/M3/M4)
+npm run electron:pack:mac:arm
+
+# 2b) macOS DMG for both Apple Silicon and Intel
+npm run electron:pack:mac
+
+# 2c) Windows installer (.exe)
+# Best on a Windows PC. Cross-build from macOS may require extra tools.
+npm run electron:pack:win
+```
+
+Config files (kept separate as requested):
+
+- `electron/` — Electron main process + preload  
+- `electron-builder.mac.yml` — DMG settings → `release/mac/`  
+- `electron-builder.win.yml` — NSIS installer → `release/win/`  
+
+**Notes**
+
+- First pack downloads Electron binaries (can take several minutes).  
+- macOS: Gatekeeper may warn on unsigned apps — right-click → Open the first time, or sign/notarize for distribution.  
+- Windows: SmartScreen may warn on unsigned installers — “More info → Run anyway”, or code-sign for production.  
+- Building a Windows `.exe` **on macOS** is best-effort; for a reliable installer, run `npm run electron:pack:win` on Windows.
 
 ## License
 

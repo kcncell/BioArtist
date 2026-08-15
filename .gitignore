@@ -11,6 +11,10 @@ node_modules
 **/node_modules
 dist
 dist-ssr
+release
+*.dmg
+*.exe
+*.blockmap
 *.local
 
 # Editor directories and files

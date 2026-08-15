@@ -1,16 +1,25 @@
 {
   "name": "bioartist",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "BioArtist — scientific figure editor",
+  "author": "BioArtist",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:electron": "ELECTRON=1 tsc -b && ELECTRON=1 vite build",
     "lint": "oxlint",
     "preview": "vite preview",
     "mcp:install": "npm install --prefix mcp-server",
     "mcp:start": "npm start --prefix mcp-server",
-    "packs:bioicons": "node scripts/build-bioicons-manifest.mjs"
+    "packs:bioicons": "node scripts/build-bioicons-manifest.mjs",
+    "electron:dev": "npm run build:electron && electron .",
+    "electron:pack:mac": "npm run build:electron && electron-builder --mac --arm64 --x64 --config electron-builder.mac.yml",
+    "electron:pack:mac:arm": "npm run build:electron && electron-builder --mac --arm64 --config electron-builder.mac.yml",
+    "electron:pack:win": "npm run build:electron && electron-builder --win --x64 --config electron-builder.win.yml",
+    "electron:pack:all": "npm run build:electron && electron-builder --mac --arm64 --x64 --config electron-builder.mac.yml && electron-builder --win --x64 --config electron-builder.win.yml"
   },
   "dependencies": {
     "@rdkit/rdkit": "^2025.3.4-1.0.0",
@@ -34,6 +43,8 @@
     "@types/react-dom": "^19.2.3",
     "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^6.0.3",
+    "electron": "^35.2.1",
+    "electron-builder": "^26.0.12",
     "oxlint": "^1.71.0",
     "typescript": "~6.0.2",
     "vite": "^8.1.1"

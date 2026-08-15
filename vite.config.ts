@@ -2,8 +2,12 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 // Proxies avoid browser CORS when resolving UniProt / RCSB structure images.
+// ELECTRON=1 → relative base so the packaged app can load assets correctly.
+const isElectron = process.env.ELECTRON === '1';
+
 export default defineConfig({
   plugins: [react()],
+  base: isElectron ? './' : '/',
   // Ketcher / indigo-ketcher reference Node globals in browser builds
   define: {
     global: 'globalThis',

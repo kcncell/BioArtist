@@ -1,0 +1,41 @@
+# macOS .dmg packaging — output: release/mac/
+appId: com.bioartist.app
+productName: BioArtist
+copyright: Copyright © BioArtist contributors
+directories:
+  output: release/mac
+  buildResources: electron/resources
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+  - "!**/*.{map,md}"
+  - "!mcp-server/**"
+  - "!scripts/**"
+  - "!docs/**"
+  - "!release/**"
+asar: true
+asarUnpack:
+  - dist/rdkit/**
+  - dist/**/*.wasm
+mac:
+  category: public.app-category.graphics-design
+  # arm64 = Apple Silicon; x64 = Intel. Both produced under release/mac/
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  darkModeSupport: true
+  hardenedRuntime: false
+  gatekeeperAssess: false
+dmg:
+  title: BioArtist
+  artifactName: BioArtist-${version}-mac-${arch}.${ext}
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
