@@ -2902,18 +2902,19 @@ html[data-theme='light'] .ba-text-dock {
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  border: 1px solid var(--ba-border);
-  background: rgba(28, 30, 36, 0.92);
-  color: var(--ba-text-secondary);
-  box-shadow: var(--ba-shadow), 0 4px 14px rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--ba-border-strong);
+  /* Theme tokens — hard-coded dark bg made light-theme icons nearly invisible */
+  background: var(--ba-surface-solid);
+  color: var(--ba-text);
+  box-shadow: var(--ba-shadow), 0 2px 10px rgba(0, 0, 0, 0.12);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   transition: background 0.12s, color 0.12s, border-color 0.12s, transform 0.12s;
 }
 
 .ba-panel-collapse-btn:hover {
-  background: var(--ba-surface-2);
-  color: var(--ba-text);
+  background: var(--ba-accent-soft);
+  color: var(--ba-accent);
   border-color: var(--ba-accent-border);
 }
 
@@ -2939,15 +2940,31 @@ html[data-theme='light'] .ba-text-dock {
   min-height: 56px;
   padding: 8px 0;
   border: 1px solid var(--ba-border-strong);
-  background: rgba(28, 30, 36, 0.96);
-  color: var(--ba-text-secondary);
-  box-shadow: var(--ba-shadow-md), 0 8px 24px rgba(0, 0, 0, 0.35);
+  background: var(--ba-surface-solid);
+  color: var(--ba-text);
+  box-shadow: var(--ba-shadow-md), 0 4px 16px rgba(0, 0, 0, 0.12);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   transition: background 0.12s, color 0.12s, border-color 0.12s, transform 0.12s;
 }
 
 .ba-panel-expand-tab:hover {
+  background: var(--ba-accent-soft);
+  color: var(--ba-accent);
+  border-color: var(--ba-accent-border);
+}
+
+/* Light theme: solid white-ish chip so chevrons stay crisp */
+html[data-theme='light'] .ba-panel-collapse-btn,
+html[data-theme='light'] .ba-panel-expand-tab {
+  background: rgba(255, 255, 255, 0.96);
+  color: #1d1d1f;
+  border-color: rgba(0, 0, 0, 0.14);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+
+html[data-theme='light'] .ba-panel-collapse-btn:hover,
+html[data-theme='light'] .ba-panel-expand-tab:hover {
   background: var(--ba-accent-soft);
   color: var(--ba-accent);
   border-color: var(--ba-accent-border);
