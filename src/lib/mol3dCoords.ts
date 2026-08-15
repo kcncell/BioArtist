@@ -77,9 +77,10 @@ async function rdkit2DMolblock(smiles: string): Promise<string | null> {
     const mol = RDKit.get_mol(smiles);
     if (!mol) return null;
     try {
-      if (typeof mol.add_hs === 'function') {
+      const molAny = mol as unknown as { add_hs?: () => void; set_new_coords?: (b?: boolean) => void };
+      if (typeof molAny.add_hs === 'function') {
         try {
-          mol.add_hs();
+          molAny.add_hs();
         } catch {
           /* optional */
         }

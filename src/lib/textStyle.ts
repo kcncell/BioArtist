@@ -49,7 +49,10 @@ function notifyAndHistory() {
   const canvas = getCanvas();
   if (!canvas) return;
   canvas.requestRenderAll();
-  canvas.fire('object:modified', { target: canvas.getActiveObject() ?? undefined });
+  const target = canvas.getActiveObject();
+  if (target) {
+    canvas.fire('object:modified', { target });
+  }
 }
 
 /**

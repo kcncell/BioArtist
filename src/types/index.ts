@@ -11,6 +11,7 @@ export type ToolId =
   | 'lines'
   | 'text'
   | 'templates'
+  | 'excalidraw'
   | 'pdb'
   | 'ai'
   | 'chem';
@@ -172,7 +173,7 @@ export interface AppState {
   columnGuides: number;
   /** Horizontal layout bands (1 = no split, ≥2 draws equal rows). Visual only. */
   rowGuides: number;
-  /** Glass pane opacity 0–0.5 (0–50% frost) */
+  /** Glass pane opacity 0–1 (0–100% frost) */
   glassOpacity: number;
   /** Glass tint hue 0–360 */
   glassHue: number;

@@ -22,6 +22,7 @@ import { ContextMenu } from '../ui/ContextMenu';
 import {
   EXTERNAL_ART_SOURCES,
   ExternalArtDialog,
+  openExternalArtOrGate,
   openExternalArtTarget,
   type ExternalArtTarget,
 } from './ExternalArtDialog';
@@ -185,7 +186,12 @@ export function BioiconsPanel() {
                 <button
                   type="button"
                   className="ba-link-btn"
-                  onClick={() => setPendingExternal(EXTERNAL_ART_SOURCES.bioicons)}
+                  onClick={() =>
+                    openExternalArtOrGate(
+                      EXTERNAL_ART_SOURCES.bioicons,
+                      setPendingExternal,
+                    )
+                  }
                 >
                   {bioiconsPack.title} website
                 </button>

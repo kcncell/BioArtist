@@ -359,7 +359,7 @@ function renderCropBar(
   left: number,
   top: number,
   _styleOverride: unknown,
-  fabricObject: FabricObject,
+  fabricObject: { cornerSize?: number },
   horizontal: boolean,
 ) {
   const size = fabricObject.cornerSize || 12;
@@ -476,8 +476,8 @@ export function installCropControls(obj: FabricObject): void {
     mtr: defaults.mtr,
   };
 
-  // Prefer equal corner resize (Canva-like reshape)
-  obj.lockUniScaling = false;
+  // Prefer free corner resize (Canva-like reshape); Fabric 7 uses lockScalingX/Y
+  obj.set({ lockScalingX: false, lockScalingY: false });
 
   const c = ensureCropState(obj);
   // Re-apply saved crop after load/history

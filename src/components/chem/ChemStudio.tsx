@@ -99,7 +99,7 @@ export function ChemStudio() {
   const [ctxMenu, setCtxMenu] = useState<ChemCtxMenuState | null>(null);
   const [favMenu, setFavMenu] = useState<ChemFavMenuState | null>(null);
   /** Zoom for ball-and-stick canvas. 1 = fit (legacy 2D SVG; 3D uses native zoom). */
-  const [viewZoom, setViewZoom] = useState(1);
+  const [, setViewZoom] = useState(1);
   const [favorites, setFavorites] = useState<ChemStructure[]>([]);
   const ketcherRef = useRef<KetcherApi | null>(null);
   const mol3dRef = useRef<Mol3DViewerHandle | null>(null);

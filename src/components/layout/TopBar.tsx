@@ -295,11 +295,11 @@ export function TopBar() {
             <input
               type="range"
               min={0}
-              max={0.5}
+              max={1}
               step={0.01}
               value={glassOpacity}
               onChange={(e) => setGlassOpacity(Number(e.target.value))}
-              aria-label="Glass opacity 0 to 50 percent"
+              aria-label="Glass opacity 0 to 100 percent"
             />
           </label>
           <div className="ba-glass-control-divider" aria-hidden />

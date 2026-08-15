@@ -184,7 +184,7 @@ export function CanvasContextMenu({ menu, onClose }: Props) {
 
       if (result.kind === 'none') {
         showToast(
-          'Nothing to paste — copy an icon on bioicons.com (Chrome/Edge), or Chem Studio → Copy for figure',
+          'Nothing to paste — copy from Bioicons, Excalidraw (⌘/Ctrl+C), or Chem Studio',
         );
         return;
       }
@@ -194,12 +194,15 @@ export function CanvasContextMenu({ menu, onClose }: Props) {
         return;
       }
       const icon = pasteResultToLibraryIcon(result);
-      if (icon) await addUserIcons([icon]);
+      if (icon) await addUserIcons([icon], { stayOnTool: true });
+      const isExcal = (result.name || '').toLowerCase().includes('excalidraw');
       showToast(
         result.kind === 'chem'
           ? `Pasted molecule “${result.name || 'structure'}”`
           : result.kind === 'svg'
-            ? `Pasted SVG “${result.name || 'icon'}”`
+            ? isExcal
+              ? 'Pasted Excalidraw figure'
+              : `Pasted SVG “${result.name || 'icon'}”`
             : 'Pasted image',
       );
     } catch (e) {
@@ -207,7 +210,7 @@ export function CanvasContextMenu({ menu, onClose }: Props) {
       showToast(
         e instanceof Error
           ? `Paste failed: ${e.message}`
-          : 'Paste failed — re-copy icon on bioicons.com (Chrome/Edge), then try again',
+          : 'Paste failed — re-copy, then try again (Chrome/Edge recommended)',
       );
     } finally {
       onClose();

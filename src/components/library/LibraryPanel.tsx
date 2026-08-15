@@ -7,6 +7,7 @@ import { useAppStore } from '../../store/appStore';
 import { AiPanel } from './AiPanel';
 import { BioiconsPanel } from './BioiconsPanel';
 import { ChemPanel } from './ChemPanel';
+import { ExcalidrawPanel } from './ExcalidrawPanel';
 import { PdbPanel } from './PdbPanel';
 import { ShapeLinePanel } from './ShapeLinePanel';
 import { SourceLibraryPanel } from './SourceLibraryPanel';
@@ -17,6 +18,7 @@ export function LibraryPanel() {
 
   if (tool === 'chem') return <ChemPanel />;
   if (tool === 'ai') return <AiPanel />;
+  if (tool === 'excalidraw') return <ExcalidrawPanel />;
   if (tool === 'templates') return <TemplatesPanel />;
   if (tool === 'pdb') return <PdbPanel />;
   if (tool === 'shapes' || tool === 'lines' || tool === 'text') {

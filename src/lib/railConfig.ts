@@ -25,6 +25,7 @@ export const DEFAULT_RAIL_ITEMS: RailItemDef[] = [
   { id: 'servier', label: 'SMA', tip: 'Servier Medical Art' },
   { id: 'chem', label: 'Chem', tip: 'Chem' },
   { id: 'ai', label: 'AI', tip: 'AI' },
+  { id: 'excalidraw', label: 'Excalidraw', tip: 'Excalidraw diagrams' },
   { id: 'templates', label: 'Templates', tip: 'Templates' },
   { id: 'pdb', label: 'PDB', tip: 'PDB' },
   { id: 'shapes', label: 'Shapes', tip: 'Shapes' },

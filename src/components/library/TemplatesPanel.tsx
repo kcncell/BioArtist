@@ -1,19 +1,23 @@
 import {
   Bot,
   Copy,
+  Download,
   Pin,
   PinOff,
+  Save,
   Sparkles,
   Trash2,
   Upload,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { downloadText } from '../../lib/export';
 import {
   applyBuiltinTemplate,
   applyUserTemplate,
   BUILTIN_TEMPLATES,
   MCP_TEMPLATE_PROMPTS,
   parseTemplateFile,
+  snapshotCurrentAsTemplate,
   sortTemplatesByPin,
   type BuiltinTemplate,
 } from '../../lib/templates';
@@ -130,21 +134,69 @@ export function TemplatesPanel() {
 
   const isPinned = (id: string) => pinnedTemplateIds.includes(id);
 
+  const saveCanvasAsTemplate = async () => {
+    const name =
+      window.prompt('Template name', useAppStore.getState().projectName || 'My template') ||
+      '';
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const snap = snapshotCurrentAsTemplate(trimmed);
+    if (!snap) {
+      showToast('Nothing on the canvas to save as a template');
+      return;
+    }
+    const template: UserTemplate = {
+      id: `tpl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: new Date().toISOString(),
+      ...snap,
+    };
+    await addUserTemplate(template);
+    showToast(`Saved template “${trimmed}”`);
+  };
+
+  const exportTemplateFile = (t: UserTemplate) => {
+    const payload = {
+      name: t.name,
+      description: t.description,
+      source: t.source,
+      version: t.project.version ?? 1,
+      artboard: t.project.artboard,
+      canvas: t.project.canvas,
+      projectName: t.project.projectName || t.name,
+      savedAt: new Date().toISOString(),
+    };
+    downloadText(
+      `${t.name.replace(/[^\w\-]+/g, '_') || 'template'}.ba`,
+      JSON.stringify(payload, null, 2),
+      'application/json',
+    );
+    showToast(`Exported “${t.name}.ba”`);
+  };
+
   return (
     <aside className="ba-left-panel">
       <div className="ba-panel-header">Templates</div>
 
       <div className="ba-panel-sub">
-        Click a template to load it on the canvas. Right-click to pin or delete. Import a saved
-        .ba figure, or generate icons via desktop AI (MCP).
+        Templates are full figure layouts (same format as a saved project <strong>.ba</strong>{' '}
+        file). Click one to load it. Save your canvas as a reusable template, or import/export{' '}
+        <code>.ba</code> files to share with collaborators.
       </div>
 
       <div className="ba-tpl-actions">
         <button
           className="ba-btn ba-btn-primary ba-btn-sm"
-          onClick={() => fileRef.current?.click()}
+          onClick={() => void saveCanvasAsTemplate()}
+          title="Snapshot the current canvas into Templates"
         >
-          <Upload size={14} /> Import template
+          <Save size={14} /> Save canvas as template
+        </button>
+        <button
+          className="ba-btn ba-btn-sm"
+          onClick={() => fileRef.current?.click()}
+          title="Import a .ba / .json template file"
+        >
+          <Upload size={14} /> Import .ba
         </button>
         <button className="ba-btn ba-btn-sm" onClick={() => setMcpOpen(true)}>
           <Sparkles size={14} /> MCP / AI tools
@@ -240,6 +292,19 @@ export function TemplatesPanel() {
               </>
             )}
           </button>
+          {ctxMenu.kind === 'user' && (
+            <button
+              type="button"
+              onClick={() => {
+                const row = list.find((r) => r.item.id === ctxMenu.id);
+                if (row?.kind === 'user') exportTemplateFile(row.item);
+                setCtxMenu(null);
+              }}
+            >
+              <Download size={13} style={{ marginRight: 6, verticalAlign: -2 }} />
+              Export .ba file
+            </button>
+          )}
           {ctxMenu.kind === 'user' ? (
             <button
               type="button"

@@ -240,12 +240,17 @@ export function KeyboardShortcuts() {
 
           if (result.kind === 'none') {
             const hint = allTextCandidates(snap2)[0]?.slice(0, 60);
+            const looksExcal =
+              !!hint &&
+              (/excalidraw/i.test(hint) || /"elements"\s*:/.test(hint));
             useAppStore
               .getState()
               .showToast(
-                hint
-                  ? `Could not paste (“${hint}…”). Re-copy the icon on bioicons.com, then ⌘V.`
-                  : 'Nothing to paste. Copy an icon on bioicons.com, then ⌘V here.',
+                looksExcal
+                  ? 'Could not parse Excalidraw clipboard. Copy again on excalidraw.com (select → ⌘/Ctrl+C), then ⌘/Ctrl+V here.'
+                  : hint
+                    ? `Could not paste (“${hint}…”). Re-copy the icon, then ⌘/Ctrl+V.`
+                    : 'Nothing to paste. Copy an icon or Excalidraw figure, then ⌘/Ctrl+V.',
               );
             return;
           }
@@ -258,14 +263,17 @@ export function KeyboardShortcuts() {
 
           const icon = pasteResultToLibraryIcon(result);
           if (icon) {
-            await useAppStore.getState().addUserIcons([icon]);
+            await useAppStore.getState().addUserIcons([icon], { stayOnTool: true });
           }
 
+          const isExcal = (result.name || '').toLowerCase().includes('excalidraw');
           const label =
             result.kind === 'chem'
               ? `Pasted molecule “${result.name || 'structure'}” onto canvas`
               : result.kind === 'svg'
-                ? `Pasted SVG “${result.name || 'icon'}” onto canvas (+ My Library)`
+                ? isExcal
+                  ? 'Pasted Excalidraw figure onto canvas'
+                  : `Pasted SVG “${result.name || 'icon'}” onto canvas (+ My Library)`
                 : `Pasted image onto canvas (+ My Library)`;
           useAppStore.getState().showToast(label);
         } catch (err) {

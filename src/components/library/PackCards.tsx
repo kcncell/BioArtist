@@ -27,6 +27,7 @@ import {
 import {
   EXTERNAL_ART_SOURCES,
   ExternalArtDialog,
+  openExternalArtOrGate,
   openExternalArtTarget,
   type ExternalArtSourceKey,
   type ExternalArtTarget,
@@ -67,7 +68,7 @@ export function PackCards({
 
   /** Same license dialog for Bioicons, NIH, Servier, and AI tools. */
   const requestOpenExternal = (key: ExternalArtSourceKey) => {
-    setPendingExternal(EXTERNAL_ART_SOURCES[key]);
+    openExternalArtOrGate(EXTERNAL_ART_SOURCES[key], setPendingExternal);
   };
 
   const approveExternal = (target: ExternalArtTarget) => {

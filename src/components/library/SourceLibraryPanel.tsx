@@ -45,6 +45,7 @@ import { ContextMenu } from '../ui/ContextMenu';
 import {
   EXTERNAL_ART_SOURCES,
   ExternalArtDialog,
+  openExternalArtOrGate,
   openExternalArtTarget,
   type ExternalArtTarget,
 } from './ExternalArtDialog';
@@ -435,7 +436,7 @@ export function SourceLibraryPanel({ scope }: Props) {
 
   const openWebsite = () => {
     if (!meta.websiteKey) return;
-    setPendingExternal(EXTERNAL_ART_SOURCES[meta.websiteKey]);
+    openExternalArtOrGate(EXTERNAL_ART_SOURCES[meta.websiteKey], setPendingExternal);
   };
 
   const renderIconGrid = (icons: LibraryIcon[]) => (

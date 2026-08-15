@@ -1,6 +1,7 @@
 import type { LibraryIcon } from '../data/catalog';
 import { addImageFromDataUrl, addSvgToCanvas } from './canvasController';
 import { pushRecentFromSmiles, readChemClipboard } from './chemLibrary';
+import { looksLikeExcalidrawJson, tryExcalidrawTextToSvg } from './excalidrawImport';
 import { smilesToSvg, stripOpaqueBackgroundRects } from './rdkit';
 
 export interface PasteResult {
@@ -314,6 +315,10 @@ export function clipboardLooksPasteable(snap: ClipboardSnap): boolean {
   }
   if (snapHasSystemGraphic(snap)) return true;
   if (extractChemFromSnap(snap)) return true;
+  // Excalidraw clipboard / scene JSON
+  for (const t of allTextCandidates(snap)) {
+    if (looksLikeExcalidrawJson(t)) return true;
+  }
   // Any non-empty plain text: we will try RDKit later (Ketcher formats vary)
   if (snap.plain.trim().length > 0 && snap.plain.trim().length < 2000) return true;
   if (snap.extras.some((x) => x.trim().length > 0 && x.trim().length < 2000)) return true;
@@ -466,7 +471,7 @@ export async function resolveClipboardSnapshot(snap: ClipboardSnap): Promise<Pas
     }
   }
 
-  // Raster image from Bioicons (they put PNG alongside SVG text — use if no SVG)
+  // Raster image from Bioicons / Excalidraw “copy as image”
   for (const file of snap.files) {
     if (file.type.startsWith('image/') && file.type !== 'image/svg+xml') {
       return {
@@ -482,6 +487,18 @@ export async function resolveClipboardSnapshot(snap: ClipboardSnap): Promise<Pas
       name: 'Pasted image',
       dataUrl: await fileToDataUrl(blob),
     };
+  }
+
+  // Excalidraw.com copy: text/plain JSON with type "excalidraw/clipboard" (or full scene)
+  for (const t of allTextCandidates(snap)) {
+    const svg = tryExcalidrawTextToSvg(t);
+    if (svg) {
+      return {
+        kind: 'svg',
+        name: 'Excalidraw figure',
+        svgContent: prepareSvgForCanvas(svg),
+      };
+    }
   }
 
   // Chem files / SMILES after graphics so path data in SVG never steals the paste

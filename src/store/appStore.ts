@@ -346,7 +346,7 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
   setRowGuides: (rowGuides) =>
     set({ rowGuides: Math.max(1, Math.min(24, Math.round(rowGuides) || 1)) }),
   setGlassOpacity: (n) => {
-    const glassOpacity = Math.min(0.5, Math.max(0, n));
+    const glassOpacity = Math.min(1, Math.max(0, n));
     saveGlassOpacity(glassOpacity);
     const { glassHue, themeMode } = get();
     applyGlassTheme(glassOpacity, glassHue, themeMode);

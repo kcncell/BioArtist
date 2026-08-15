@@ -1,24 +1,42 @@
 /**
- * Gate before opening external art / AI image sites.
+ * Gate before opening external art / AI sites.
  * Portaled to document.body so it is never clipped by the left panel.
  */
 import { ExternalLink } from 'lucide-react';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useAppStore } from '../../store/appStore';
+
+export type ExternalArtKind = 'library' | 'ai' | 'excalidraw';
 
 export type ExternalArtTarget = {
   title: string;
   url: string;
   /** Short note for this source (license or AI caution) */
   licenseNote: string;
-  /** library = Bioicons/NIH/Servier; ai = image generators */
-  kind?: 'library' | 'ai';
-  /** Optional copy-paste prompts (AI tools only) */
-  examplePrompts?: string[];
+  /** library = Bioicons/NIH/Servier; ai = image generators; excalidraw = diagram/code AI */
+  kind?: ExternalArtKind;
 };
 
-/** Shared targets for My Library external links. */
+const DISMISS_PREFIX = 'bioartist-ext-gate-dismiss-v1-';
+
+export function isExternalArtGateDismissed(kind: ExternalArtKind = 'library'): boolean {
+  try {
+    return localStorage.getItem(DISMISS_PREFIX + kind) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setExternalArtGateDismissed(kind: ExternalArtKind, dismissed: boolean) {
+  try {
+    if (dismissed) localStorage.setItem(DISMISS_PREFIX + kind, '1');
+    else localStorage.removeItem(DISMISS_PREFIX + kind);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Shared targets for external links. */
 export const EXTERNAL_ART_SOURCES = {
   bioicons: {
     title: 'Bioicons',
@@ -41,58 +59,49 @@ export const EXTERNAL_ART_SOURCES = {
     licenseNote:
       'Servier Medical Art (SMART): free under CC BY 4.0 — you must credit Servier and note if you modified the image.',
   },
-  /** Alphabetical for UI: ChatGPT, Claude, Gemini, Grok */
   chatgpt: {
-    title: 'ChatGPT (image generation)',
+    title: 'ChatGPT',
     url: 'https://chatgpt.com/',
     kind: 'ai' as const,
     licenseNote:
-      'AI can invent wrong anatomy, labels, and proportions. Best for simple lab icons (pipette, plate reader, flask, centrifuge) — not publication-grade anatomy. Your account terms apply; you own checking use rights.',
-    examplePrompts: [
-      'Flat scientific SVG icon of a micropipette, side view, clean black outline, solid pastel fill, pure white transparent background, no text, no watermark, no logo, centered, minimal vector style',
-      'Simple SVG icon of a 96-well microplate, top-down, clear wells in grid, flat design, white background, no brand names, no logos, high contrast for a figure',
-      'Minimal lab plate reader machine icon, front view, vector SVG style, flat colors, transparent background, no text, no watermark, no reflections',
-    ],
+      'AI can invent wrong anatomy, labels, and proportions. Best for simple lab icons — not publication-grade anatomy. Your account terms apply; you own checking use rights.',
   },
   claude: {
-    title: 'Claude (image generation)',
+    title: 'Claude',
     url: 'https://claude.ai/',
     kind: 'ai' as const,
     licenseNote:
-      'AI can invent wrong anatomy, labels, and proportions. Best for simple lab icons (pipette, plate reader, flask, centrifuge) — not publication-grade anatomy. Your Anthropic account terms apply; you own checking use rights.',
-    examplePrompts: [
-      'Flat scientific SVG icon of a micropipette, side view, clean black outline, solid pastel fill, pure white transparent background, no text, no watermark, no logo, centered, minimal vector style',
-      'Simple SVG icon of a 96-well microplate, top-down, clear wells in grid, flat design, white background, no brand names, no logos, high contrast for a figure',
-      'Minimal lab plate reader machine icon, front view, vector SVG style, flat colors, transparent background, no text, no watermark, no reflections',
-    ],
+      'AI can invent wrong anatomy, labels, and proportions. Best for simple lab icons — not publication-grade anatomy. Your Anthropic account terms apply; you own checking use rights.',
   },
   gemini: {
-    title: 'Gemini (image generation)',
+    title: 'Gemini',
     url: 'https://gemini.google.com/app',
     kind: 'ai' as const,
     licenseNote:
-      'AI can invent wrong anatomy, labels, and proportions. Best for simple lab icons (pipette, plate reader, flask, centrifuge) — not publication-grade anatomy. Your Google account terms apply; you own checking use rights.',
-    examplePrompts: [
-      'Flat scientific SVG icon of a micropipette, side view, clean black outline, solid pastel fill, pure white transparent background, no text, no watermark, no logo, centered, minimal vector style',
-      'Simple SVG icon of a 96-well microplate, top-down, clear wells in grid, flat design, white background, no brand names, no logos, high contrast for a figure',
-      'Minimal lab plate reader machine icon, front view, vector SVG style, flat colors, transparent background, no text, no watermark, no reflections',
-    ],
+      'AI can invent wrong anatomy, labels, and proportions. Best for simple lab icons — not publication-grade anatomy. Your Google account terms apply; you own checking use rights.',
   },
   grok: {
-    title: 'Grok (image generation)',
+    title: 'Grok',
     url: 'https://grok.com/',
     kind: 'ai' as const,
     licenseNote:
-      'AI can invent wrong anatomy, labels, and proportions. Best for simple lab icons (pipette, plate reader, flask, centrifuge) — not publication-grade anatomy. Your xAI account terms apply; you own checking use rights.',
-    examplePrompts: [
-      'Flat scientific SVG icon of a micropipette, side view, clean black outline, solid pastel fill, pure white transparent background, no text, no watermark, no logo, centered, minimal vector style',
-      'Simple SVG icon of a 96-well microplate, top-down, clear wells in grid, flat design, white background, no brand names, no logos, high contrast for a figure',
-      'Minimal lab plate reader machine icon, front view, vector SVG style, flat colors, transparent background, no text, no watermark, no reflections',
-    ],
+      'AI can invent wrong anatomy, labels, and proportions. Best for simple lab icons — not publication-grade anatomy. Your xAI account terms apply; you own checking use rights.',
   },
 } as const satisfies Record<string, ExternalArtTarget>;
 
 export type ExternalArtSourceKey = keyof typeof EXTERNAL_ART_SOURCES;
+
+/** AI targets tuned for the Excalidraw panel (diagram / JSON / SVG code). */
+export function excalidrawAiTarget(key: ExternalArtSourceKey): ExternalArtTarget {
+  const base = EXTERNAL_ART_SOURCES[key];
+  return {
+    title: base.title,
+    url: base.url,
+    kind: 'excalidraw',
+    licenseNote:
+      'AI-generated diagrams and code can be wrong, incomplete, or invalid JSON/SVG. Always review the output before placing it on your figure or using it in a paper.',
+  };
+}
 
 interface Props {
   target: ExternalArtTarget | null;
@@ -101,10 +110,11 @@ interface Props {
 }
 
 export function ExternalArtDialog({ target, onCancel, onApprove }: Props) {
-  const showToast = useAppStore((s) => s.showToast);
+  const [dontShowAgain, setDontShowAgain] = useState(false);
 
   useEffect(() => {
     if (!target) return;
+    setDontShowAgain(false);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -122,7 +132,21 @@ export function ExternalArtDialog({ target, onCancel, onApprove }: Props) {
 
   if (!target || typeof document === 'undefined') return null;
 
-  const isAi = target.kind === 'ai';
+  const kind: ExternalArtKind = target.kind || 'library';
+  const isAi = kind === 'ai';
+  const isExcal = kind === 'excalidraw';
+
+  const title =
+    isExcal
+      ? 'Open AI for Excalidraw'
+      : isAi
+        ? 'Open AI image tool'
+        : 'Open external art source';
+
+  const onAccept = () => {
+    if (dontShowAgain) setExternalArtGateDismissed(kind, true);
+    onApprove(target);
+  };
 
   return createPortal(
     <div
@@ -133,16 +157,31 @@ export function ExternalArtDialog({ target, onCancel, onApprove }: Props) {
       onClick={onCancel}
     >
       <div className="ba-ext-art-modal" onClick={(e) => e.stopPropagation()}>
-        <h3 id="ba-ext-art-title">
-          {isAi ? 'Open AI image tool' : 'Open external art source'}
-        </h3>
+        <h3 id="ba-ext-art-title">{title}</h3>
         <p>
           You are about to open <strong>{target.title}</strong> in a new tab
-          {isAi ? ' (sign in with your own account if needed)' : ''}.
+          {isAi || isExcal ? ' (sign in with your own account if needed)' : ''}.
         </p>
         <div className="ba-ext-art-box">
-          <p className="ba-ext-art-box-lead">{isAi ? 'AI caution' : 'Your responsibility'}</p>
-          {isAi ? (
+          <p className="ba-ext-art-box-lead">
+            {isExcal ? 'Excalidraw / AI caution' : isAi ? 'AI caution' : 'Your responsibility'}
+          </p>
+          {isExcal ? (
+            <>
+              <p>
+                AI may produce <strong>incorrect science</strong>, messy layouts, or{' '}
+                <strong>invalid Excalidraw JSON / SVG</strong>. Treat outputs as drafts — check
+                structure, labels, and code before placing them on your canvas or using them in a
+                publication.
+              </p>
+              <p>
+                Use the <strong>example prompts in the Excalidraw panel</strong> (not in this
+                dialog), then paste the AI&apos;s JSON or SVG into the code box and click{' '}
+                <strong>Place on canvas</strong>.
+              </p>
+              <p className="ba-ext-art-license">{target.licenseNote}</p>
+            </>
+          ) : isAi ? (
             <>
               <p>
                 AI models often make mistakes (wrong proportions, fake labels, messy backgrounds).
@@ -165,38 +204,19 @@ export function ExternalArtDialog({ target, onCancel, onApprove }: Props) {
           )}
         </div>
 
-        {isAi && target.examplePrompts && target.examplePrompts.length > 0 && (
-          <div className="ba-ext-art-prompts">
-            <p className="ba-ext-art-box-lead">Example prompts (copy into the AI)</p>
-            <ul>
-              {target.examplePrompts.map((prompt) => (
-                <li key={prompt.slice(0, 40)}>
-                  <code className="ba-ext-art-prompt">{prompt}</code>
-                  <button
-                    type="button"
-                    className="ba-btn ba-btn-sm"
-                    onClick={() => {
-                      void navigator.clipboard?.writeText(prompt).then(
-                        () => showToast('Prompt copied — paste into the AI chat'),
-                        () => showToast('Could not copy — select the text manually'),
-                      );
-                    }}
-                    title="Copy prompt"
-                  >
-                    Copy
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
         <p className="ba-ext-art-hint">
-          {isAi ? (
+          {isExcal ? (
             <>
-              Ask for <strong>flat vector / SVG-style</strong>, <strong>transparent or pure white
-              background</strong>, <strong>no text, no watermark, no logo</strong>. Then download or
-              copy → <strong>Import</strong> or <kbd>⌘V</kbd> on the canvas.
+              After the AI replies: copy the JSON or <code>&lt;svg&gt;</code> → paste into the
+              Excalidraw panel → <strong>Place on canvas</strong>.
+            </>
+          ) : isAi ? (
+            <>
+              Ask for <strong>flat vector / SVG-style</strong>,{' '}
+              <strong>transparent or pure white background</strong>,{' '}
+              <strong>no text, no watermark, no logo</strong>. Then download or copy →{' '}
+              <strong>Import</strong> or <kbd>⌘V</kbd> on the canvas. Example prompts are in the AI
+              panel.
             </>
           ) : (
             <>
@@ -205,16 +225,22 @@ export function ExternalArtDialog({ target, onCancel, onApprove }: Props) {
             </>
           )}
         </p>
+
+        <label className="ba-ext-art-dismiss">
+          <input
+            type="checkbox"
+            checked={dontShowAgain}
+            onChange={(e) => setDontShowAgain(e.target.checked)}
+          />
+          <span>Don&apos;t show this again</span>
+        </label>
+
         <div className="ba-ext-art-actions">
           <button type="button" className="ba-btn" onClick={onCancel}>
             Cancel
           </button>
-          <button
-            type="button"
-            className="ba-btn ba-btn-primary"
-            onClick={() => onApprove(target)}
-          >
-            <ExternalLink size={14} /> I understand — open site
+          <button type="button" className="ba-btn ba-btn-primary" onClick={onAccept}>
+            <ExternalLink size={14} /> I accept — open site
           </button>
         </div>
       </div>
@@ -223,7 +249,23 @@ export function ExternalArtDialog({ target, onCancel, onApprove }: Props) {
   );
 }
 
-/** Open after approval — shared by PackCards / LibraryPanel. */
+/** Open after approval — shared by PackCards / panels. */
 export function openExternalArtTarget(target: ExternalArtTarget): void {
   window.open(target.url, '_blank', 'noopener,noreferrer');
+}
+
+/**
+ * Open external target, skipping the gate if the user already accepted
+ * “don’t show again” for that kind.
+ */
+export function openExternalArtOrGate(
+  target: ExternalArtTarget,
+  setPending: (t: ExternalArtTarget | null) => void,
+): void {
+  const kind = target.kind || 'library';
+  if (isExternalArtGateDismissed(kind)) {
+    openExternalArtTarget(target);
+    return;
+  }
+  setPending(target);
 }

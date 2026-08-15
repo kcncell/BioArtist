@@ -19,6 +19,7 @@ import {
 import {
   EXTERNAL_ART_SOURCES,
   ExternalArtDialog,
+  openExternalArtOrGate,
   openExternalArtTarget,
   type ExternalArtSourceKey,
   type ExternalArtTarget,
@@ -34,7 +35,7 @@ export function AiPanel() {
   const [pendingExternal, setPendingExternal] = useState<ExternalArtTarget | null>(null);
 
   const requestOpenExternal = (key: ExternalArtSourceKey) => {
-    setPendingExternal(EXTERNAL_ART_SOURCES[key]);
+    openExternalArtOrGate(EXTERNAL_ART_SOURCES[key], setPendingExternal);
   };
 
   const mcpCount = useMemo(() => userLibrary.filter(isMcpIcon).length, [userLibrary]);

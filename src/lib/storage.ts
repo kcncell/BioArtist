@@ -320,9 +320,9 @@ export function saveFavoritesDockOpen(open: boolean): void {
 export function loadGlassOpacity(): number {
   try {
     const n = Number(localStorage.getItem(GLASS_OPACITY_KEY));
-    // Range: 0 → 0.5 (0–50% glass frost)
+    // Range: 0 → 1 (0–100% glass frost / pane opacity)
     if (!Number.isFinite(n)) return 0.22;
-    return Math.min(0.5, Math.max(0, n));
+    return Math.min(1, Math.max(0, n));
   } catch {
     return 0.22;
   }
