@@ -50,12 +50,16 @@ export function ExcalidrawPanel() {
     }
     setBusy(true);
     try {
-      const kind = await placeExcalidrawCode(code);
-      showToast(
-        kind === 'excalidraw'
-          ? 'Excalidraw figure placed on canvas'
-          : 'SVG / image placed on canvas',
-      );
+      const result = await placeExcalidrawCode(code);
+      if (result.kind === 'svg') {
+        showToast('SVG / image placed on canvas');
+      } else if (result.missingImages > 0) {
+        showToast(
+          `Placed figure · Gemini’s DNA/photo wasn’t in the JSON (empty files{}). BioArtist drew a geometric helix where it could — re-copy the Pathway prompt and ask for shapes-only (no type:"image").`,
+        );
+      } else {
+        showToast('Excalidraw figure placed on canvas');
+      }
     } catch (e) {
       console.error(e);
       showToast(e instanceof Error ? e.message : 'Could not place figure');

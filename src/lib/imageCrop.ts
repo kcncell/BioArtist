@@ -1,8 +1,9 @@
 /**
  * Canva-style reshape + crop for figures and pictures.
  *
- * - Corner handles: proportional scale (reshape) — Fabric default
+ * - Corner handles: free reshape; hold Shift to lock aspect ratio
  * - Side handles: crop from that edge
+ * - Rotation: curved-arrow handle above the picture (drag to rotate)
  * - Right-click “Crop”: dedicated crop mode (larger side handles, Esc to finish)
  *
  * Images use native cropX/cropY/width/height.
@@ -386,7 +387,66 @@ function renderCropBar(
 }
 
 /**
- * Install Canva-style controls: corners scale equally, sides crop.
+ * Curved rotate-arrow control (hint above a selected picture).
+ * Drag around this control to rotate.
+ */
+function renderRotateArrowHint(
+  ctx: CanvasRenderingContext2D,
+  left: number,
+  top: number,
+  _styleOverride: unknown,
+  _fabricObject: FabricObject,
+): void {
+  ctx.save();
+  ctx.translate(left, top);
+  // Drawn in screen space so the curved arrow stays readable while rotating
+
+  const stroke = '#8ec5ff';
+  const r = 11;
+
+  // Soft hit disc
+  ctx.beginPath();
+  ctx.arc(0, 0, 15, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(26, 28, 34, 0.88)';
+  ctx.fill();
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Curved arrow (open arc)
+  ctx.beginPath();
+  ctx.arc(0, 0, r, (-Math.PI * 3) / 4, Math.PI / 3, false);
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 2.25;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  // Arrowhead at arc end
+  const end = Math.PI / 3;
+  const ex = Math.cos(end) * r;
+  const ey = Math.sin(end) * r;
+  const tangent = end + Math.PI / 2;
+  const ah = 5.5;
+  ctx.beginPath();
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(
+    ex - Math.cos(tangent - 0.55) * ah,
+    ey - Math.sin(tangent - 0.55) * ah,
+  );
+  ctx.lineTo(
+    ex - Math.cos(tangent + 0.55) * ah,
+    ey - Math.sin(tangent + 0.55) * ah,
+  );
+  ctx.closePath();
+  ctx.fillStyle = stroke;
+  ctx.fill();
+
+  ctx.restore();
+}
+
+/**
+ * Install Canva-style controls: free corner reshape (Shift = lock aspect),
+ * side crop bars, and a curved rotate handle.
  * Safe to call repeatedly (reassigns controls).
  */
 export function installCropControls(obj: FabricObject): void {
@@ -398,7 +458,7 @@ export function installCropControls(obj: FabricObject): void {
     !!(obj as any).baCropMode || cropModeTarget === obj;
   const barScale = inCropMode ? 1.35 : 1;
 
-  // Corners stay proportional reshape
+  // Corners: free reshape; Shift locks aspect (via canvas.uniformScaling=false)
   const cornerHandler = controlsUtils.scalingEqually;
   const cornerCursor = controlsUtils.scaleCursorStyleHandler;
 
@@ -473,10 +533,23 @@ export function installCropControls(obj: FabricObject): void {
       sizeY: 10 * barScale,
       render: (ctx, left, top, style, fo) => renderCropBar(ctx, left, top, style, fo, true),
     }),
-    mtr: defaults.mtr,
+    // Curved rotate hint above the picture
+    mtr: new Control({
+      x: 0,
+      y: -0.5,
+      offsetY: -36,
+      cursorStyleHandler: controlsUtils.rotationStyleHandler,
+      actionHandler: controlsUtils.rotationWithSnapping,
+      actionName: 'rotate',
+      withConnection: true,
+      sizeX: 32,
+      sizeY: 32,
+      touchSizeX: 44,
+      touchSizeY: 44,
+      render: renderRotateArrowHint,
+    }),
   };
 
-  // Prefer free corner resize (Canva-like reshape); Fabric 7 uses lockScalingX/Y
   obj.set({ lockScalingX: false, lockScalingY: false });
 
   const c = ensureCropState(obj);

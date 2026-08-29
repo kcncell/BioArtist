@@ -6,7 +6,6 @@ import {
   clientToScene,
   computeFitScale,
   disposeCanvas,
-  exportJSON,
   fitToScreen,
   getLayers,
   getSelectionCount,
@@ -22,10 +21,18 @@ import {
   setCanvasScrollElement,
   setZoom,
 } from '../../lib/canvasController';
+import { applySessionDocuments } from '../../lib/documentManager';
 import { parseIconDragData } from '../../lib/iconDrag';
 import { placeLibraryIcon } from '../../lib/placeIcon';
+import {
+  flushDiskAutosave,
+  flushSessionDraft,
+  flushSessionDraftSync,
+  loadNormalizedSessionDraft,
+  markActiveDocumentDirty,
+} from '../../lib/sessionDraft';
 import { readSvgFiles } from '../../lib/svgImport';
-import { loadDraft, saveDraft, useAppStore } from '../../store/appStore';
+import { useAppStore } from '../../store/appStore';
 import { CanvasToolbar } from '../layout/CanvasToolbar';
 import { TextFloatingToolbar } from '../text/TextFloatingToolbar';
 import {
@@ -52,6 +59,7 @@ export function FabricCanvas() {
   const objectCount = useAppStore((s) => s.objectCount);
   const artboardWidth = useAppStore((s) => s.artboardWidth);
   const artboardHeight = useAppStore((s) => s.artboardHeight);
+  const sessionReadyRef = useRef(false);
   const showGrid = useAppStore((s) => s.showGrid);
   const columnGuides = useAppStore((s) => s.columnGuides);
   const rowGuides = useAppStore((s) => s.rowGuides);
@@ -80,14 +88,23 @@ export function FabricCanvas() {
     initCanvas(canvasRef.current);
     setCanvasArtboard(artboardWidth, artboardHeight);
     setCanvasListeners({
-      onLayers: () => setLayers(getLayers()),
+      onLayers: () => {
+        setLayers(getLayers());
+        if (sessionReadyRef.current) markActiveDocumentDirty();
+      },
       onSelection: () => {
         const { count, props, selectedIds } = getSelectionProps();
         setSelection(count, props, selectedIds);
       },
-      onHistory: (u, r) => setHistoryFlags(u, r),
+      onHistory: (u, r) => {
+        setHistoryFlags(u, r);
+        if (sessionReadyRef.current && u) markActiveDocumentDirty();
+      },
       onZoom: (z) => setZoomState(z),
-      onObjectCount: (n) => setObjectCount(n),
+      onObjectCount: (n) => {
+        setObjectCount(n);
+        if (sessionReadyRef.current) markActiveDocumentDirty();
+      },
     });
 
     // Native right-click on Fabric upper canvas (React bubble alone is unreliable)
@@ -108,38 +125,50 @@ export function FabricCanvas() {
     });
 
     void useAppStore.getState().hydrateLibrary();
-    void loadDraft<{
-      projectName?: string;
-      canvas?: unknown;
-      artboard?: { width: number; height: number };
-    }>().then((draft) => {
-      if (draft?.canvas) {
-        void importJSON({ canvas: draft.canvas, artboard: draft.artboard }).then(() => {
-          if (draft.projectName) setProjectName(draft.projectName);
-          if (draft.artboard) {
-            setArtboardSize(draft.artboard.width, draft.artboard.height);
+    void loadNormalizedSessionDraft()
+      .then(async (session) => {
+        if (session?.documents?.length) {
+          const active = applySessionDocuments(
+            session.documents,
+            session.activeDocumentId,
+          );
+          const snap = active?.snapshot;
+          if (snap?.canvas) {
+            await importJSON({
+              canvas: snap.canvas,
+              artboard: snap.artboard || {
+                width: active.artboardWidth,
+                height: active.artboardHeight,
+              },
+            });
+            setProjectName(active.name);
+            setArtboardSize(active.artboardWidth, active.artboardHeight);
           }
           fitToScreen();
           updateFitScale();
-        });
-      } else {
-        fitToScreen();
-        updateFitScale();
-      }
-    });
+          if (session.documents.length > 1) {
+            showToast(
+              `Restored ${session.documents.length} open figures from autosave`,
+            );
+          }
+        } else {
+          fitToScreen();
+          updateFitScale();
+        }
+      })
+      .finally(() => {
+        sessionReadyRef.current = true;
+      });
 
     const saveDraftNow = () => {
-      const data = exportJSON();
-      if (data) {
-        saveDraft({
-          ...data,
-          projectName: useAppStore.getState().projectName,
-          savedAt: new Date().toISOString(),
-        });
-      }
+      void flushSessionDraft().then(() => {
+        void flushDiskAutosave();
+      });
     };
     const autosave = window.setInterval(saveDraftNow, 8000);
-    const onBeforeUnload = () => saveDraftNow();
+    const onBeforeUnload = () => {
+      flushSessionDraftSync();
+    };
     window.addEventListener('beforeunload', onBeforeUnload);
 
     const onKeyDown = (e: KeyboardEvent) => {

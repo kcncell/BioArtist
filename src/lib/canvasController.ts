@@ -44,9 +44,17 @@ FabricObject.customProperties = [
   'baReagentSlot',
   'baTextBox',
   'baMinHeight',
+  'baCornerRadius',
   'baCrop',
   'baCropMode',
+  /** Group = original shape + centered label (double-click to type). */
+  'baShapeWithText',
+  /** Textbox/IText living inside a baShapeWithText group. */
+  'baShapeLabel',
 ];
+
+/** Default soft-corner radius for bordered text boxes (px, unscaled). */
+export const TEXT_BOX_CORNER_RADIUS = 10;
 
 /**
  * Fabric Textbox uses `stroke` for glyph outlines, not a rectangular border.
@@ -64,24 +72,64 @@ function isNoneStroke(v: unknown): boolean {
   return s === '' || s === 'none' || s === 'transparent' || s === 'rgba(0,0,0,0)' || s === 'rgba(0, 0, 0, 0)';
 }
 
+function getBaCornerRadius(obj: FabricObject): number {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const r = (obj as any).baCornerRadius;
+  if (typeof r === 'number' && Number.isFinite(r) && r >= 0) return r;
+  return TEXT_BOX_CORNER_RADIUS;
+}
+
+/** Rounded rect path (fill or stroke). Clamps radius to half the shorter side. */
+function pathRoundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius: number,
+) {
+  const r = Math.max(0, Math.min(radius, Math.abs(w) / 2, Math.abs(h) / 2));
+  ctx.beginPath();
+  if (typeof ctx.roundRect === 'function') {
+    ctx.roundRect(x, y, w, h, r);
+    return;
+  }
+  // Fallback for older engines
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
 // Patch once — survives loadFromJSON as long as baTextBox is restored via customProperties.
 const _textboxRender = Textbox.prototype._render;
 Textbox.prototype._render = function (this: Textbox, ctx: CanvasRenderingContext2D) {
   if (isBaTextBox(this)) {
     const sw = this.strokeWidth ?? 0;
     const stroke = this.stroke;
+    const dim = this._getNonTransformedDimensions();
+    const radius = getBaCornerRadius(this);
     if (sw > 0 && !isNoneStroke(stroke)) {
-      const dim = this._getNonTransformedDimensions();
       ctx.save();
       ctx.strokeStyle = stroke as string;
       ctx.lineWidth = sw;
-      ctx.lineJoin = 'miter';
+      ctx.lineJoin = 'round';
       ctx.setLineDash([]);
-      // Centered stroke around the text box bounds
-      ctx.strokeRect(-dim.x / 2, -dim.y / 2, dim.x, dim.y);
+      // Soft rounded border around the text box
+      pathRoundRect(ctx, -dim.x / 2, -dim.y / 2, dim.x, dim.y, radius);
+      ctx.stroke();
       ctx.restore();
     }
-    // Suppress glyph outline while drawing text
+    // Clip text to the box — overflow is hidden; font size stays fixed when resizing
+    ctx.save();
+    pathRoundRect(ctx, -dim.x / 2, -dim.y / 2, dim.x, dim.y, radius);
+    ctx.clip();
     const savedStroke = this.stroke;
     const savedSw = this.strokeWidth;
     this.stroke = undefined as unknown as string;
@@ -89,20 +137,88 @@ Textbox.prototype._render = function (this: Textbox, ctx: CanvasRenderingContext
     _textboxRender.call(this, ctx);
     this.stroke = savedStroke;
     this.strokeWidth = savedSw;
+    ctx.restore();
     return;
   }
   _textboxRender.call(this, ctx);
 };
 
+/** Soft fill behind baTextBox (matches rounded border). */
+const _textboxRenderBackground = Textbox.prototype._renderBackground;
+Textbox.prototype._renderBackground = function (
+  this: Textbox,
+  ctx: CanvasRenderingContext2D,
+) {
+  if (!isBaTextBox(this)) {
+    _textboxRenderBackground.call(this, ctx);
+    return;
+  }
+  if (!this.backgroundColor) return;
+  const dim = this._getNonTransformedDimensions();
+  const radius = getBaCornerRadius(this);
+  ctx.fillStyle = this.backgroundColor;
+  pathRoundRect(ctx, -dim.x / 2, -dim.y / 2, dim.x, dim.y, radius);
+  ctx.fill();
+  this._removeShadow(ctx);
+};
+
+/**
+ * Vertical layout inside baTextBox:
+ * - Text shorter than the box → center
+ * - Text taller than the box → top-align (overflow clipped in _render)
+ */
+const _textboxGetTopOffset = Textbox.prototype._getTopOffset;
+Textbox.prototype._getTopOffset = function (this: Textbox) {
+  if (!isBaTextBox(this)) return _textboxGetTopOffset.call(this);
+  const textH =
+    typeof this.calcTextHeight === 'function' ? this.calcTextHeight() : (this.height ?? 0);
+  const boxH = this.height ?? textH;
+  if (textH <= boxH + 0.5) return -textH / 2;
+  return -boxH / 2;
+};
+
+/**
+ * Keep a fixed frame height (baMinHeight) when set.
+ * Width drives wrapping; height does not grow with text (overflow is clipped).
+ * “Fit to text” clears baMinHeight so height can hug content again.
+ */
 const _textboxInitDimensions = Textbox.prototype.initDimensions;
 Textbox.prototype.initDimensions = function (this: Textbox) {
   _textboxInitDimensions.call(this);
   if (!isBaTextBox(this)) return;
-  const minH = (this as Textbox & { baMinHeight?: number }).baMinHeight;
-  if (typeof minH === 'number' && minH > 0 && (this.height ?? 0) < minH) {
-    this.height = minH;
+  const fixedH = (this as Textbox & { baMinHeight?: number }).baMinHeight;
+  if (typeof fixedH === 'number' && fixedH > 0) {
+    this.height = fixedH;
   }
 };
+
+/**
+ * Corner/edge scaling must not change font size.
+ * Bake scaleX/scaleY into width + baMinHeight, then reset scale to 1.
+ */
+function normalizeBaTextBoxScale(obj: FabricObject): boolean {
+  if (!isBaTextBox(obj)) return false;
+  const tb = obj as Textbox & { baMinHeight?: number };
+  const sx = tb.scaleX ?? 1;
+  const sy = tb.scaleY ?? 1;
+  if (Math.abs(sx - 1) < 1e-4 && Math.abs(sy - 1) < 1e-4) return false;
+
+  const fontSize = tb.fontSize;
+  const newW = Math.max(40, (tb.width || 1) * Math.abs(sx));
+  const newH = Math.max(36, (tb.height || 1) * Math.abs(sy));
+
+  tb.set({
+    scaleX: 1,
+    scaleY: 1,
+    width: newW,
+    fontSize,
+  });
+  tb.baMinHeight = newH;
+  if (typeof tb.initDimensions === 'function') tb.initDimensions();
+  tb.set({ height: newH, fontSize });
+  tb.setCoords();
+  return true;
+}
 
 let ARTBOARD_W = 900;
 let ARTBOARD_H = 600;
@@ -156,12 +272,24 @@ function ensureMeta(obj: FabricObject, name?: string) {
 
 function guessName(obj: FabricObject): string {
   const t = (obj.type || 'object').toLowerCase();
-  if (t === 'textbox') return 'Text box';
+  if (t === 'textbox') {
+    return (obj as FabricObject & { baShapeLabel?: boolean }).baShapeLabel
+      ? 'Shape label'
+      : 'Text box';
+  }
   if (t === 'i-text' || t === 'text') return 'Text';
   if (t === 'rect') return 'Rectangle';
   if (t === 'ellipse' || t === 'circle') return 'Ellipse';
   if (t === 'line') return 'Line';
-  if (t === 'group') return 'Group';
+  if (t === 'group') {
+    if ((obj as FabricObject & { baShapeWithText?: boolean }).baShapeWithText) {
+      const shape = (obj as Group).getObjects?.().find(
+        (o) => !(o as FabricObject & { baShapeLabel?: boolean }).baShapeLabel,
+      );
+      return shape ? guessName(shape) : 'Shape';
+    }
+    return 'Group';
+  }
   if (t === 'path') return 'Path';
   if (t === 'triangle' || t === 'polygon') return 'Shape';
   if (t === 'activeselection') return 'Selection';
@@ -216,6 +344,9 @@ export function initCanvas(el: HTMLCanvasElement): Canvas {
     selectionColor: 'rgba(142, 197, 255, 0.12)',
     selectionBorderColor: '#8ec5ff',
     selectionLineWidth: 1,
+    // Free corner reshape by default; hold Shift to lock aspect ratio
+    uniformScaling: false,
+    uniScaleKey: 'shiftKey',
   });
 
   canvas.on('selection:created', () => {
@@ -231,7 +362,14 @@ export function initCanvas(el: HTMLCanvasElement): Canvas {
     if (isCropModeActive()) exitCropMode();
     listeners.onSelection?.();
   });
-  canvas.on('object:modified', () => {
+  // Text boxes: reshape changes width/height only — never font size
+  canvas.on('object:scaling', (e) => {
+    const t = e.target;
+    if (t && isBaTextBox(t)) normalizeBaTextBoxScale(t);
+  });
+  canvas.on('object:modified', (e) => {
+    const t = e.target;
+    if (t && isBaTextBox(t)) normalizeBaTextBoxScale(t);
     listeners.onSelection?.();
     listeners.onLayers?.();
     if (!historyLock && !batchMode) pushHistory();
@@ -239,7 +377,7 @@ export function initCanvas(el: HTMLCanvasElement): Canvas {
   canvas.on('object:added', (e) => {
     if (e.target && !isActiveSelection(e.target)) {
       ensureMeta(e.target);
-      // Corners = reshape, sides = crop for figures / pictures
+      // Corners = reshape (Shift locks aspect), sides = crop, curved rotate handle
       if (isCroppable(e.target)) installCropControls(e.target);
     }
     listeners.onLayers?.();
@@ -255,6 +393,18 @@ export function initCanvas(el: HTMLCanvasElement): Canvas {
   canvas.on('text:changed', () => {
     listeners.onSelection?.();
     listeners.onLayers?.();
+  });
+
+  // Double-click a shape → type inside it (keep original geometry)
+  canvas.on('mouse:dblclick', (opt) => {
+    const target = (opt as { target?: FabricObject })?.target;
+    if (!target || isActiveSelection(target)) return;
+    if (isShapeTextGroup(target)) {
+      beginEditShapeLabel(target as Group);
+      return;
+    }
+    if (!isConvertibleShape(target)) return;
+    enableTextInShape(target);
   });
 
   // Keep fabric’s hidden editing textarea from scrolling/shifting the app chrome
@@ -605,6 +755,70 @@ export function renameLayer(id: string, name: string) {
   obj.baName = name;
   listeners.onLayers?.();
   listeners.onSelection?.();
+}
+
+function findLayerObject(id: string): FabricObject | undefined {
+  if (!canvas) return undefined;
+  return canvas.getObjects().find((o) => asBa(o).baId === id);
+}
+
+/** Delete a single layer/object by id (from the Layers panel). */
+export function deleteLayerById(id: string): boolean {
+  if (!canvas) return false;
+  const obj = findLayerObject(id);
+  if (!obj) return false;
+  withHistory(() => {
+    if (!canvas) return;
+    if (canvas.getActiveObjects().includes(obj)) {
+      canvas.discardActiveObject();
+    }
+    canvas.remove(obj);
+  });
+  return true;
+}
+
+export function bringLayerForward(id: string): boolean {
+  if (!canvas) return false;
+  const obj = findLayerObject(id);
+  if (!obj) return false;
+  canvas.bringObjectForward(obj);
+  canvas.requestRenderAll();
+  listeners.onLayers?.();
+  pushHistory();
+  return true;
+}
+
+export function sendLayerBackward(id: string): boolean {
+  if (!canvas) return false;
+  const obj = findLayerObject(id);
+  if (!obj) return false;
+  canvas.sendObjectBackwards(obj);
+  canvas.requestRenderAll();
+  listeners.onLayers?.();
+  pushHistory();
+  return true;
+}
+
+export function bringLayerToFront(id: string): boolean {
+  if (!canvas) return false;
+  const obj = findLayerObject(id);
+  if (!obj) return false;
+  canvas.bringObjectToFront(obj);
+  canvas.requestRenderAll();
+  listeners.onLayers?.();
+  pushHistory();
+  return true;
+}
+
+export function sendLayerToBack(id: string): boolean {
+  if (!canvas) return false;
+  const obj = findLayerObject(id);
+  if (!obj) return false;
+  canvas.sendObjectToBack(obj);
+  canvas.requestRenderAll();
+  listeners.onLayers?.();
+  pushHistory();
+  return true;
 }
 
 export function bringForward() {
@@ -1741,8 +1955,11 @@ export async function addSvgToCanvas(
 
 /** Deepest black — default for every new shape / line / arrow on the artboard */
 const DEEP_BLACK = '#000000';
-const SHAPE_FILL = DEEP_BLACK;
+/** Shapes start hollow — user fills from the properties panel. */
+const SHAPE_FILL = '';
 const SHAPE_STROKE = DEEP_BLACK;
+/** Medium border for new shapes */
+const SHAPE_STROKE_WIDTH = 2.5;
 const LINE_STROKE = DEEP_BLACK;
 
 function regularPolygon(sides: number, r: number): { x: number; y: number }[] {
@@ -1891,6 +2108,8 @@ function onTextBoxMouseDown(opt: {
     stroke: '#000000',
     strokeWidth: 1,
     strokeDashArray: [4, 3],
+    rx: TEXT_BOX_CORNER_RADIUS,
+    ry: TEXT_BOX_CORNER_RADIUS,
     selectable: false,
     evented: false,
     excludeFromExport: true,
@@ -2052,8 +2271,12 @@ function createTextBoxAt(
     strokeWidth: 1.5,
     strokeUniform: true,
     editable: true,
+    // Wrap by words inside the current width
     splitByGrapheme: false,
-    textAlign: 'left',
+    // Centered in the frame when text fits (overflow clipped when taller)
+    textAlign: 'center',
+    // Reshape must not visually scale glyphs — we bake scale → width/height
+    lockScalingFlip: true,
     // Equal narrow margins: top / right / bottom / left
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ...({ padding: pad } as { padding: number }),
@@ -2064,7 +2287,10 @@ function createTextBoxAt(
   ensureMeta(box, 'Text box');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (box as any).baTextBox = true;
-  // Keep drawn height until user enables “Fit to text”
+  // Soft corners (rounded border + fill)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (box as any).baCornerRadius = TEXT_BOX_CORNER_RADIUS;
+  // Fixed frame height — reshape updates this; text wraps/clips inside
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (box as any).baMinHeight = h;
   if (typeof (box as Textbox).initDimensions === 'function') {
@@ -2072,7 +2298,13 @@ function createTextBoxAt(
   }
   // ensureMeta may set control padding — re-apply equal text inset after
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (box as any).set({ padding: pad });
+  (box as any).set({
+    padding: pad,
+    textAlign: 'center',
+    height: h,
+    scaleX: 1,
+    scaleY: 1,
+  });
   box.setCoords();
   canvas.add(box);
   return box;
@@ -2156,6 +2388,228 @@ export function fitTextBoxToContent(): boolean {
   }
 }
 
+/** Basic geometric shapes that can hold typed text inside (keep their geometry). */
+function isConvertibleShape(obj: FabricObject | null | undefined): boolean {
+  if (!obj || isActiveSelection(obj) || isGroup(obj)) return false;
+  const t = (obj.type || '').toLowerCase();
+  if (t === 'i-text' || t === 'textbox' || t === 'text') return false;
+  if (t === 'image' || t === 'line' || t === 'polyline') return false;
+  return (
+    t === 'rect' ||
+    t === 'ellipse' ||
+    t === 'circle' ||
+    t === 'triangle' ||
+    t === 'polygon' ||
+    t === 'path'
+  );
+}
+
+function isShapeTextGroup(obj: FabricObject | null | undefined): boolean {
+  if (!obj || isActiveSelection(obj) || !isGroup(obj)) return false;
+  return !!(obj as FabricObject & { baShapeWithText?: boolean }).baShapeWithText;
+}
+
+function findShapeLabel(group: Group): Textbox | IText | null {
+  for (const o of group.getObjects()) {
+    if ((o as FabricObject & { baShapeLabel?: boolean }).baShapeLabel) {
+      return o as Textbox | IText;
+    }
+    const t = (o.type || '').toLowerCase();
+    if (t === 'textbox' || t === 'i-text' || t === 'text') return o as Textbox | IText;
+  }
+  return null;
+}
+
+/** Fraction of bbox used for wrapping text (ellipses/diamonds need more inset). */
+function shapeTextWidthFactor(obj: FabricObject): number {
+  const t = (obj.type || '').toLowerCase();
+  if (t === 'ellipse' || t === 'circle') return 0.68;
+  if (t === 'triangle' || t === 'polygon' || t === 'path') return 0.58;
+  return 0.82;
+}
+
+/**
+ * Ungroup shape+label, edit the label, then regroup when editing ends.
+ * Fabric cannot reliably enterEditing on text that stays inside a Group.
+ */
+function beginEditShapeLabel(group: Group): void {
+  if (!canvas || !isShapeTextGroup(group)) return;
+
+  const label = findShapeLabel(group);
+  if (!label) return;
+
+  const shapeName = asBa(group).baName || guessName(group);
+  const items = group.removeAll();
+  canvas.remove(group);
+  items.forEach((item) => {
+    ensureMeta(item);
+    canvas!.add(item);
+  });
+
+  const text =
+    (items.find(
+      (o) => (o as FabricObject & { baShapeLabel?: boolean }).baShapeLabel,
+    ) as Textbox | IText | undefined) ||
+    (items.find((o) => {
+      const t = (o.type || '').toLowerCase();
+      return t === 'textbox' || t === 'i-text' || t === 'text';
+    }) as Textbox | IText | undefined);
+  const shape = items.find((o) => o !== text);
+  if (!text || !shape) return;
+
+  canvas.setActiveObject(text);
+  canvas.requestRenderAll();
+
+  let finished = false;
+  const regroup = () => {
+    if (finished || !canvas) return;
+    finished = true;
+    text.off('editing:exited', regroup);
+    const stillShape = canvas.getObjects().includes(shape);
+    const stillText = canvas.getObjects().includes(text);
+    if (!stillShape || !stillText) return;
+    if (text.isEditing) {
+      try {
+        text.exitEditing();
+      } catch {
+        /* ignore */
+      }
+    }
+    canvas.remove(shape);
+    canvas.remove(text);
+    const g = new Group([shape, text], {
+      subTargetCheck: true,
+      interactive: true,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (g as any).baShapeWithText = true;
+    ensureMeta(g, shapeName);
+    canvas.add(g);
+    canvas.setActiveObject(g);
+    canvas.requestRenderAll();
+    listeners.onLayers?.();
+    listeners.onSelection?.();
+    scheduleHistoryPush();
+  };
+
+  text.on('editing:exited', regroup);
+
+  requestAnimationFrame(() => {
+    try {
+      pinFabricTextarea(text as Textbox | IText);
+      text.enterEditing();
+      if (typeof (text as Textbox).selectAll === 'function') {
+        (text as Textbox).selectAll();
+      }
+      canvas?.requestRenderAll();
+    } catch (err) {
+      console.warn('[beginEditShapeLabel]', err);
+      regroup();
+    }
+  });
+}
+
+export function selectionIsConvertibleShape(): boolean {
+  if (!canvas) return false;
+  const active = canvas.getActiveObjects();
+  if (active.length !== 1) return false;
+  const obj = active[0];
+  return isConvertibleShape(obj) || isShapeTextGroup(obj);
+}
+
+/**
+ * Keep the original shape and add a centered label inside it, then start typing.
+ * Used by double-click and the canvas context menu.
+ * @deprecated name kept for callers — does not convert to a rectangle text box.
+ */
+export function convertObjectToTextBox(obj: FabricObject): Textbox | null {
+  return enableTextInShape(obj);
+}
+
+/**
+ * Enable (or resume) typing inside a shape without changing its geometry.
+ */
+export function enableTextInShape(obj: FabricObject): Textbox | null {
+  if (!canvas) return null;
+
+  if (isShapeTextGroup(obj)) {
+    beginEditShapeLabel(obj as Group);
+    return null;
+  }
+  if (!isConvertibleShape(obj)) return null;
+
+  const scaleX = obj.scaleX || 1;
+  const scaleY = obj.scaleY || 1;
+  const w = Math.max(48, (obj.width || 100) * Math.abs(scaleX));
+  const h = Math.max(36, (obj.height || 56) * Math.abs(scaleY));
+  const center = obj.getCenterPoint();
+  const factor = shapeTextWidthFactor(obj);
+  const labelW = Math.max(36, w * factor);
+  const fontSize = Math.max(12, Math.min(22, Math.round(h * 0.28)));
+
+  let label: Textbox | null = null;
+  withHistory(() => {
+    if (!canvas) return;
+
+    label = new Textbox('Text', {
+      left: center.x,
+      top: center.y,
+      originX: 'center',
+      originY: 'center',
+      width: labelW,
+      fontFamily: 'Inter, system-ui, sans-serif',
+      fontSize,
+      fill: DEEP_BLACK,
+      textAlign: 'center',
+      backgroundColor: '',
+      strokeWidth: 0,
+      editable: true,
+      splitByGrapheme: false,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...({ padding: 4 } as { padding: number }),
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (label as any).baShapeLabel = true;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (label as any).hiddenTextareaContainer = getFabricTextareaHost();
+    ensureMeta(label, 'Label');
+    if (typeof label.initDimensions === 'function') label.initDimensions();
+    label.setCoords();
+
+    const shapeName = asBa(obj).baName || guessName(obj);
+    canvas.remove(obj);
+    const group = new Group([obj, label], {
+      subTargetCheck: true,
+      interactive: true,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (group as any).baShapeWithText = true;
+    ensureMeta(group, shapeName);
+    canvas.add(group);
+    canvas.setActiveObject(group);
+    canvas.requestRenderAll();
+  });
+
+  // Enter edit on next frame (ungroup → edit → regroup on exit)
+  requestAnimationFrame(() => {
+    const active = canvas?.getActiveObject();
+    if (active && isShapeTextGroup(active)) {
+      beginEditShapeLabel(active as Group);
+    }
+  });
+
+  return label;
+}
+
+/** Add / edit text inside the selected shape (keeps ellipse, diamond, etc.). */
+export function convertSelectionToTextBox(): boolean {
+  if (!canvas) return false;
+  const active = canvas.getActiveObjects();
+  if (active.length !== 1) return false;
+  enableTextInShape(active[0]);
+  return true;
+}
+
 export function addShape(kind: ShapeKind) {
   if (!canvas) return;
   const cx = ARTBOARD_W / 2;
@@ -2167,7 +2621,8 @@ export function addShape(kind: ShapeKind) {
     originY: 'center' as const,
     fill: SHAPE_FILL,
     stroke: SHAPE_STROKE,
-    strokeWidth: 2,
+    strokeWidth: SHAPE_STROKE_WIDTH,
+    strokeUniform: true,
   };
 
   let obj: FabricObject;

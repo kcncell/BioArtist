@@ -28,9 +28,10 @@ import {
   saveRightPanelOpen,
   saveThemeMode,
 } from '../lib/storage';
-import { applyGlassTheme } from '../lib/glassTheme';
+import { applyGlassTheme, MAX_GLASS_OPACITY } from '../lib/glassTheme';
 import type {
   AppState,
+  AutosaveUiStatus,
   LayerInfo,
   LibraryTab,
   OpenDocument,
@@ -92,6 +93,7 @@ export interface AppActions {
   toggleRightPanel: () => void;
   setOpenDocuments: (docs: OpenDocument[]) => void;
   setActiveDocumentId: (id: string) => void;
+  setAutosaveStatus: (status: AutosaveUiStatus) => void;
   hydrateLibrary: () => Promise<void>;
 }
 
@@ -140,9 +142,18 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
       snapshot: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      dirty: true,
+      fileName: null,
+      lastDiskSavedAt: null,
     },
   ],
   activeDocumentId: 'doc_initial',
+  autosaveStatus: {
+    draftAt: null,
+    diskAt: null,
+    fileName: null,
+    message: null,
+  },
 
   setTool: (tool) => {
     // Drop any in-progress “draw text box” when leaving/changing tools
@@ -171,7 +182,9 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
   setProjectName: (projectName) => {
     const id = get().activeDocumentId;
     const openDocuments = get().openDocuments.map((d) =>
-      d.id === id ? { ...d, name: projectName, updatedAt: new Date().toISOString() } : d,
+      d.id === id
+        ? { ...d, name: projectName, dirty: true, updatedAt: new Date().toISOString() }
+        : d,
     );
     set({ projectName, openDocuments });
   },
@@ -346,7 +359,7 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
   setRowGuides: (rowGuides) =>
     set({ rowGuides: Math.max(1, Math.min(24, Math.round(rowGuides) || 1)) }),
   setGlassOpacity: (n) => {
-    const glassOpacity = Math.min(1, Math.max(0, n));
+    const glassOpacity = Math.min(MAX_GLASS_OPACITY, Math.max(0, n));
     saveGlassOpacity(glassOpacity);
     const { glassHue, themeMode } = get();
     applyGlassTheme(glassOpacity, glassHue, themeMode);
@@ -391,6 +404,7 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
   },
   setOpenDocuments: (openDocuments) => set({ openDocuments }),
   setActiveDocumentId: (activeDocumentId) => set({ activeDocumentId }),
+  setAutosaveStatus: (autosaveStatus) => set({ autosaveStatus }),
   hydrateLibrary: async () => {
     const [items, templates, pinned, pinnedIcons, favorites, dockOpen] = await Promise.all([
       idbLoadLibrary(),

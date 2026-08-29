@@ -1,31 +1,58 @@
-import { Eye, EyeOff, GripVertical, Lock, Unlock } from 'lucide-react';
-import { useRef, useState } from 'react';
 import {
+  ArrowDownToLine,
+  ArrowUpToLine,
+  Eye,
+  EyeOff,
+  GripVertical,
+  Lock,
+  MoreVertical,
+  Trash2,
+  Unlock,
+} from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import {
+  bringLayerForward,
+  bringLayerToFront,
+  deleteLayerById,
   renameLayer,
   reorderLayer,
   selectById,
+  sendLayerBackward,
+  sendLayerToBack,
   toggleLock,
   toggleVisibility,
 } from '../../lib/canvasController';
 import { useAppStore } from '../../store/appStore';
+import { ContextMenu } from '../ui/ContextMenu';
+
+type LayerMenuState = {
+  x: number;
+  y: number;
+  id: string;
+  name: string;
+  visible: boolean;
+  locked: boolean;
+};
 
 export function LayersPanel() {
   const layers = useAppStore((s) => s.layers);
   const selectionProps = useAppStore((s) => s.selectionProps);
   const selectedIds = useAppStore((s) => s.selectedIds);
+  const showToast = useAppStore((s) => s.showToast);
   const primaryId = selectedIds[0];
 
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [dropPlace, setDropPlace] = useState<'before' | 'after'>('before');
+  const [ctxMenu, setCtxMenu] = useState<LayerMenuState | null>(null);
   const dragIdRef = useRef<string | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   const onDragStart = (e: React.DragEvent, id: string) => {
     dragIdRef.current = id;
     setDragId(id);
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', id);
-    // Improve drag ghost in some browsers
     if (e.currentTarget instanceof HTMLElement) {
       e.dataTransfer.setDragImage(e.currentTarget, 12, 16);
     }
@@ -42,7 +69,6 @@ export function LayersPanel() {
   };
 
   const onDragLeave = (e: React.DragEvent) => {
-    // Only clear if leaving the row entirely
     const related = e.relatedTarget as Node | null;
     if (related && (e.currentTarget as HTMLElement).contains(related)) return;
     setOverId(null);
@@ -68,6 +94,57 @@ export function LayersPanel() {
     dragIdRef.current = null;
   };
 
+  const openLayerMenu = (
+    e: React.MouseEvent,
+    layer: { id: string; name: string; visible: boolean; locked: boolean },
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    selectById(layer.id);
+    setCtxMenu({
+      x: e.clientX,
+      y: e.clientY,
+      id: layer.id,
+      name: layer.name,
+      visible: layer.visible,
+      locked: layer.locked,
+    });
+  };
+
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCtxMenu(null);
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      const root = menuRef.current;
+      const t = e.target as Node | null;
+      if (root && t && root.contains(t)) return;
+      setCtxMenu(null);
+    };
+    const t = window.setTimeout(() => {
+      window.addEventListener('pointerdown', onPointerDown, true);
+      window.addEventListener('keydown', onKey);
+    }, 0);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [ctxMenu]);
+
+  const runLayerAction = (label: string, fn: () => void) => {
+    try {
+      fn();
+      showToast(label);
+    } catch (err) {
+      console.error(label, err);
+      showToast(`Could not ${label.toLowerCase()}`);
+    } finally {
+      setCtxMenu(null);
+    }
+  };
+
   return (
     <div className="ba-right-section layers">
       <div className="ba-panel-header">
@@ -77,7 +154,7 @@ export function LayersPanel() {
         </span>
       </div>
       <div className="ba-panel-sub" style={{ paddingTop: 0, paddingBottom: 6 }}>
-        Drag rows to reorder · top = front
+        Drag to reorder · right-click for more · top = front
       </div>
 
       {layers.length === 0 ? (
@@ -96,6 +173,8 @@ export function LayersPanel() {
                   selected ? 'selected' : '',
                   isDragging ? 'dragging' : '',
                   isOver ? `drop-${dropPlace}` : '',
+                  !layer.visible ? 'hidden-layer' : '',
+                  layer.locked ? 'locked-layer' : '',
                 ]
                   .filter(Boolean)
                   .join(' ')}
@@ -106,6 +185,7 @@ export function LayersPanel() {
                 onDrop={(e) => onDrop(e, layer.id)}
                 onDragEnd={onDragEnd}
                 onClick={() => selectById(layer.id)}
+                onContextMenu={(e) => openLayerMenu(e, layer)}
               >
                 <span className="ba-layer-grip" title="Drag to reorder" aria-hidden>
                   <GripVertical size={14} />
@@ -115,6 +195,7 @@ export function LayersPanel() {
                 </span>
                 <div className="ba-layer-actions">
                   <button
+                    type="button"
                     title={layer.visible ? 'Hide' : 'Show'}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -124,6 +205,7 @@ export function LayersPanel() {
                     {layer.visible ? <Eye size={13} /> : <EyeOff size={13} />}
                   </button>
                   <button
+                    type="button"
                     title={layer.locked ? 'Unlock' : 'Lock'}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -131,6 +213,26 @@ export function LayersPanel() {
                     }}
                   >
                     {layer.locked ? <Lock size={13} /> : <Unlock size={13} />}
+                  </button>
+                  <button
+                    type="button"
+                    title="Delete layer"
+                    className="ba-layer-delete"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const ok = deleteLayerById(layer.id);
+                      showToast(ok ? `Deleted “${layer.name}”` : 'Could not delete layer');
+                    }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    title="More actions"
+                    aria-label={`More actions for ${layer.name}`}
+                    onClick={(e) => openLayerMenu(e, layer)}
+                  >
+                    <MoreVertical size={13} />
                   </button>
                 </div>
               </div>
@@ -157,6 +259,104 @@ export function LayersPanel() {
             }}
           />
         </div>
+      )}
+
+      {ctxMenu && (
+        <ContextMenu ref={menuRef} x={ctxMenu.x} y={ctxMenu.y}>
+          <div className="ba-ctx-heading" title={ctxMenu.name}>
+            {ctxMenu.name}
+          </div>
+          <button
+            type="button"
+            role="menuitem"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() =>
+              runLayerAction(ctxMenu.visible ? 'Hidden' : 'Shown', () => {
+                toggleVisibility(ctxMenu.id);
+              })
+            }
+          >
+            {ctxMenu.visible ? <EyeOff size={14} /> : <Eye size={14} />}
+            {ctxMenu.visible ? 'Hide' : 'Show'}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() =>
+              runLayerAction(ctxMenu.locked ? 'Unlocked' : 'Locked', () => {
+                toggleLock(ctxMenu.id);
+              })
+            }
+          >
+            {ctxMenu.locked ? <Unlock size={14} /> : <Lock size={14} />}
+            {ctxMenu.locked ? 'Unlock' : 'Lock'}
+          </button>
+          <div className="ba-ctx-sep" role="separator" />
+          <button
+            type="button"
+            role="menuitem"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() =>
+              runLayerAction('Brought to front', () => {
+                bringLayerToFront(ctxMenu.id);
+              })
+            }
+          >
+            <ArrowUpToLine size={14} /> Bring to front
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() =>
+              runLayerAction('Brought forward', () => {
+                bringLayerForward(ctxMenu.id);
+              })
+            }
+          >
+            Bring forward
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() =>
+              runLayerAction('Sent backward', () => {
+                sendLayerBackward(ctxMenu.id);
+              })
+            }
+          >
+            Send backward
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() =>
+              runLayerAction('Sent to back', () => {
+                sendLayerToBack(ctxMenu.id);
+              })
+            }
+          >
+            <ArrowDownToLine size={14} /> Send to back
+          </button>
+          <div className="ba-ctx-sep" role="separator" />
+          <button
+            type="button"
+            role="menuitem"
+            className="danger"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() =>
+              runLayerAction(`Deleted “${ctxMenu.name}”`, () => {
+                const ok = deleteLayerById(ctxMenu.id);
+                if (!ok) throw new Error('delete failed');
+              })
+            }
+          >
+            <Trash2 size={14} /> Delete
+          </button>
+        </ContextMenu>
       )}
     </div>
   );

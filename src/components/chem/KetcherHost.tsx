@@ -12,6 +12,7 @@ import 'ketcher-react/dist/index.css';
 import { getRDKit } from '../../lib/rdkit';
 import {
   addStructureToKetcher,
+  disableStereoFlagDisplay,
   type AddStructureInput,
   type AddStructureResult,
 } from './ketcherAddStructure';
@@ -26,7 +27,9 @@ import {
   reassertLastTool,
   type SelectionEnhanceHandle,
 } from './ketcherSelectionEnhance';
+import { attachKetcherCanvasScrollbars } from './ketcherCanvasScrollbars';
 import { installKetcherStructureMove } from './ketcherStructureMove';
+import { installKetcherToolbarTooltips } from './ketcherToolbarTooltips';
 
 /** MIME type for favorite drag-and-drop onto the sketcher. */
 export const CHEM_FAV_DRAG_MIME = 'application/x-bioartist-chem-fav';
@@ -162,8 +165,16 @@ export function KetcherHost({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ketcherRef = useRef<any>(null);
   const enhanceRef = useRef<SelectionEnhanceHandle | null>(null);
+  const scrollDisposeRef = useRef<(() => void) | null>(null);
   const [dropActive, setDropActive] = useState(false);
   const dragDepth = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      scrollDisposeRef.current?.();
+      scrollDisposeRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     smilesRef.current = initialSmiles;
@@ -184,16 +195,19 @@ export function KetcherHost({
 
   // Selection enhance: hover, structure-click, ⌘/Ctrl marquee
   // Structure move: single-fragment drag + alignment snap guides
+  // Toolbar hover hints (top / left / right / bottom icons)
   useEffect(() => {
     const el = hostRef.current;
     if (!el) return;
     const handle = installKetcherSelectionEnhance(el, () => ketcherRef.current);
     enhanceRef.current = handle;
     const disposeMove = installKetcherStructureMove(el, () => ketcherRef.current);
+    const disposeTips = installKetcherToolbarTooltips(el);
     return () => {
       handle.dispose();
       enhanceRef.current = null;
       disposeMove();
+      disposeTips();
     };
   }, []);
 
@@ -314,6 +328,7 @@ export function KetcherHost({
       <Editor
         staticResourcesUrl=""
         structServiceProvider={provider}
+        disableMacromoleculesEditor
         errorHandler={(message: string) => {
           console.warn('[Ketcher]', message);
           if (/failed|error/i.test(message) && !initOnce.current) {
@@ -323,6 +338,8 @@ export function KetcherHost({
         onInit={(ketcher) => {
           initOnce.current = true;
           ketcherRef.current = ketcher;
+          // Hide floating ABS/AND/OR stereo-flag text (wedge bonds still draw)
+          disableStereoFlagDisplay(ketcher);
           // Track select mode (fragment vs rectangle) before any tool() call
           enhanceRef.current?.bindEditor(ketcher);
 
@@ -418,11 +435,22 @@ export function KetcherHost({
                 /* optional seed */
               })
               .finally(() => {
+                disableStereoFlagDisplay(ketcher);
                 assertSelect();
               });
           } else {
             assertSelect();
           }
+
+          // Always-visible H/V scrollbars that pan the Ketcher viewBox
+          scrollDisposeRef.current?.();
+          if (hostRef.current) {
+            scrollDisposeRef.current = attachKetcherCanvasScrollbars(
+              hostRef.current,
+              () => ketcherRef.current,
+            );
+          }
+
           onReady?.(api);
         }}
       />

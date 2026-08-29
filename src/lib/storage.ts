@@ -12,11 +12,13 @@ const LEFT_PANEL_OPEN_KEY = 'bioartist-left-panel-open-v1';
 const RIGHT_PANEL_OPEN_KEY = 'bioartist-right-panel-open-v1';
 
 const DB_NAME = 'bioartist';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const LIB_STORE = 'userLibrary';
 const DRAFT_STORE = 'drafts';
 const PACK_STORE = 'packs';
 const TEMPLATE_STORE = 'userTemplates';
+/** FileSystemFileHandle per open document id (same-file autosave). */
+const HANDLE_STORE = 'projectHandles';
 const PINNED_KEY = 'bioartist-pinned-templates';
 const PINNED_ICONS_KEY = 'bioartist-pinned-icons';
 
@@ -36,6 +38,9 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(TEMPLATE_STORE)) {
         db.createObjectStore(TEMPLATE_STORE, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(HANDLE_STORE)) {
+        db.createObjectStore(HANDLE_STORE);
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -133,6 +138,55 @@ export async function idbLoadDraft<T>(): Promise<T | null> {
     return raw ? (JSON.parse(raw) as T) : null;
   } catch {
     return null;
+  }
+}
+
+export async function idbSaveFileHandle(
+  docId: string,
+  handle: FileSystemFileHandle,
+): Promise<boolean> {
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(HANDLE_STORE, 'readwrite');
+      tx.objectStore(HANDLE_STORE).put(handle, docId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    return true;
+  } catch (e) {
+    console.warn('idbSaveFileHandle', e);
+    return false;
+  }
+}
+
+export async function idbLoadFileHandle(
+  docId: string,
+): Promise<FileSystemFileHandle | null> {
+  try {
+    const db = await openDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(HANDLE_STORE, 'readonly');
+      const req = tx.objectStore(HANDLE_STORE).get(docId);
+      req.onsuccess = () => resolve((req.result as FileSystemFileHandle) ?? null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function idbDeleteFileHandle(docId: string): Promise<void> {
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(HANDLE_STORE, 'readwrite');
+      tx.objectStore(HANDLE_STORE).delete(docId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    /* ignore */
   }
 }
 
@@ -320,9 +374,9 @@ export function saveFavoritesDockOpen(open: boolean): void {
 export function loadGlassOpacity(): number {
   try {
     const n = Number(localStorage.getItem(GLASS_OPACITY_KEY));
-    // Range: 0 → 1 (0–100% glass frost / pane opacity)
+    // Range: 0 → 0.5 (0–50% glass frost / pane opacity)
     if (!Number.isFinite(n)) return 0.22;
-    return Math.min(1, Math.max(0, n));
+    return Math.min(0.5, Math.max(0, n));
   } catch {
     return 0.22;
   }
@@ -330,7 +384,7 @@ export function loadGlassOpacity(): number {
 
 export function saveGlassOpacity(v: number): void {
   try {
-    localStorage.setItem(GLASS_OPACITY_KEY, String(v));
+    localStorage.setItem(GLASS_OPACITY_KEY, String(Math.min(0.5, Math.max(0, v))));
   } catch {
     /* ignore */
   }

@@ -32,7 +32,28 @@ export interface OpenDocument {
   } | null;
   createdAt: string;
   updatedAt: string;
+  /** Bound .ba file name when using File System Access (handle lives in IndexedDB). */
+  fileName?: string | null;
+  /** True when canvas changed since last successful disk write (or never saved). */
+  dirty?: boolean;
+  /** ISO time of last successful write to the bound .ba file. */
+  lastDiskSavedAt?: string | null;
 }
+
+/** Persisted multi-tab session (IndexedDB draft). File handles stored separately. */
+export interface SessionDraft {
+  version: 2;
+  savedAt: string;
+  activeDocumentId: string;
+  documents: OpenDocument[];
+}
+
+export type AutosaveUiStatus = {
+  draftAt: string | null;
+  diskAt: string | null;
+  fileName: string | null;
+  message: string | null;
+};
 
 /** User-imported figure template (canvas snapshot) */
 export interface UserTemplate {
@@ -173,7 +194,7 @@ export interface AppState {
   columnGuides: number;
   /** Horizontal layout bands (1 = no split, ≥2 draws equal rows). Visual only. */
   rowGuides: number;
-  /** Glass pane opacity 0–1 (0–100% frost) */
+  /** Glass pane opacity 0–0.5 (0–50% frost; capped for text readability) */
   glassOpacity: number;
   /** Glass tint hue 0–360 */
   glassHue: number;
@@ -188,6 +209,7 @@ export interface AppState {
   /** Multi-document tabs */
   openDocuments: OpenDocument[];
   activeDocumentId: string;
+  autosaveStatus: AutosaveUiStatus;
 }
 
 export type FabricCanvas = Canvas;

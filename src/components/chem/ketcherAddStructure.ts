@@ -111,6 +111,71 @@ function collectAtomBondIds(mol: {
   return { atoms, bonds };
 }
 
+/**
+ * Remove Ketcher "ABS" / AND / OR enhanced-stereo flag labels.
+ * Wedge/hash bonds stay; only the floating stereo-flag text is cleared.
+ * Those flags are easy to leave stuck in selection and hard to deselect.
+ */
+export function clearEnhancedStereoFlagLabels(ketcher: KetcherLike): void {
+  try {
+    const editor = ketcher?.editor;
+    const render = editor?.render;
+    const mol = render?.ctab?.molecule ?? getMolecule(ketcher);
+    if (!mol?.frags) return;
+
+    mol.frags.forEach((frag: { stereoFlagPosition?: unknown; updateStereoFlag?: (m: unknown) => void }) => {
+      if (!frag) return;
+      try {
+        frag.stereoFlagPosition = undefined;
+        // Drop stereo-atom bookkeeping that drives ABS/AND/OR labels
+        const atoms = (frag as { stereoAtoms?: number[] }).stereoAtoms;
+        if (Array.isArray(atoms)) atoms.splice(0, atoms.length);
+        frag.updateStereoFlag?.(mol);
+      } catch {
+        /* per-fragment best effort */
+      }
+    });
+
+    // Do not leave enhancedFlags in the selection (undeselectable ABS)
+    try {
+      const sel =
+        (typeof editor.selection === 'function' && editor.selection()) ||
+        editor._selection ||
+        null;
+      if (sel && (sel.enhancedFlags?.length || sel.enhancedFlags?.size)) {
+        editor.selection({
+          atoms: Array.isArray(sel.atoms) ? sel.atoms : [],
+          bonds: Array.isArray(sel.bonds) ? sel.bonds : [],
+        });
+      }
+    } catch {
+      /* optional */
+    }
+
+    try {
+      render?.update?.(true);
+    } catch {
+      /* optional */
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Hide stereo-flag labels in Chem Studio (ABS text). Stereobonds still draw. */
+export function disableStereoFlagDisplay(ketcher: KetcherLike): void {
+  try {
+    const opts = ketcher?.editor?.render?.options;
+    if (opts) {
+      opts.showStereoFlags = false;
+      opts.ignoreChiralFlag = true;
+    }
+    clearEnhancedStereoFlagLabels(ketcher);
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Select only atoms/bonds that appeared after an add (so drag moves the new structure only). */
 function selectNewStructure(
   ketcher: KetcherLike,
@@ -130,8 +195,10 @@ function selectNewStructure(
       if (!beforeBonds.has(id)) bonds.push(id);
     });
     if (atoms.length || bonds.length) {
+      // Explicit selection without enhancedFlags (avoids stuck ABS)
       editor.selection({ atoms, bonds });
     }
+    clearEnhancedStereoFlagLabels(ketcher);
   } catch {
     /* ignore */
   }
@@ -191,6 +258,7 @@ export async function addStructureToKetcher(
     restoreView(ketcher, viewSnap);
     const after = await readSmiles(ketcher);
     if (after && (after !== before || !before)) {
+      clearEnhancedStereoFlagLabels(ketcher);
       selectNewStructure(ketcher, beforeAtoms, beforeBonds);
       // Keep view again after selection side-effects
       restoreView(ketcher, viewSnap);

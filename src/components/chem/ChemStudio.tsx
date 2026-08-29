@@ -157,7 +157,7 @@ export function ChemStudio() {
           setMol3dInput('');
           ketcherRef.current?.setSelectStructure();
           setStatus(
-            '2D ACS — hover/click structure · ⌘/Ctrl+drag marquee (any tool) · Rectangle tool: plain drag marquee too'
+            '2D ACS — empty-canvas drag selects · drag a selected molecule/arrow/plus to move · eraser/bond keep native drag'
           );
         } else {
           setMol3dInput(s);
@@ -362,7 +362,7 @@ export function ChemStudio() {
           );
         } else {
           setStatus(
-            `Could not add “${fav.name}” — ${result.error || 'try Sync SMILES or re-save the favorite'}`,
+            `Could not add “${fav.name}” — ${result.error || 'try re-saving the favorite'}`,
           );
         }
       } catch (err) {
@@ -564,22 +564,139 @@ export function ChemStudio() {
     [refreshFavorites],
   );
 
-  const syncFromKetcher = useCallback(async () => {
-    const k = ketcherRef.current;
-    if (!k) return;
+  /**
+   * SMILES field → canvas: place structure using the active display style.
+   * Enter in the SMILES input also runs this.
+   */
+  const convertSmilesToStructure = useCallback(async () => {
+    const raw = smiles.trim();
+    if (!raw) {
+      setStatus('Enter a SMILES string first');
+      return;
+    }
+    setBusy(true);
     try {
-      const s = (await k.getSmiles()).trim();
-      if (s) {
-        setSmiles(s);
-        setStatus('Synced from sketcher');
-      } else {
-        setStatus('Sketcher is empty');
+      const RDKit = await getRDKit();
+      const mol = RDKit.get_mol(raw);
+      if (!mol) {
+        setStatus('Invalid SMILES — check the string and try again');
+        return;
       }
+      let canon = raw;
+      try {
+        if (typeof mol.is_valid === 'function' && !mol.is_valid()) {
+          setStatus('Invalid SMILES — check the string and try again');
+          return;
+        }
+        canon = (mol.get_smiles() || raw).trim() || raw;
+      } finally {
+        mol.delete();
+      }
+
+      if (style === '2d') {
+        const api = ketcherRef.current;
+        if (!api) {
+          setStatus('Sketcher not ready — wait a moment and try again');
+          return;
+        }
+        const result = await api.addFragment({ smiles: canon });
+        if (!result.ok) {
+          setStatus(result.error || 'Could not place structure on canvas');
+          return;
+        }
+        if (result.smiles) setSmiles(result.smiles);
+        else setSmiles(canon);
+        setStatus('Placed structure on canvas from SMILES (2D ACS)');
+        return;
+      }
+
+      // CPK ball & stick (and other styled views): show in 3D viewer
+      setSmiles(canon);
+      setMol3dInput(canon);
+      try {
+        const acs = await renderChemStyle(canon, '2d', { width: 280, height: 220 });
+        setCanvasSvg(acs);
+      } catch {
+        setCanvasSvg(null);
+      }
+      try {
+        if (ketcherRef.current) {
+          const result = await ketcherRef.current.addFragment({ smiles: canon });
+          if (!result.ok) {
+            await ketcherRef.current.setMolecule(canon);
+          }
+        }
+      } catch {
+        try {
+          await ketcherRef.current?.setMolecule(canon);
+        } catch {
+          /* sketcher sync optional in 3D mode */
+        }
+      }
+      setStatus('Showing structure in CPK ball & stick from SMILES');
     } catch (e) {
       console.error(e);
-      setStatus('Could not read structure from sketcher');
+      setStatus('Could not convert SMILES to structure');
+    } finally {
+      setBusy(false);
     }
-  }, []);
+  }, [smiles, style]);
+
+  /**
+   * Canvas (selection preferred) → SMILES field.
+   */
+  const convertStructureToSmiles = useCallback(async () => {
+    setBusy(true);
+    try {
+      if (ketcherRef.current?.getSelectedOrFullStructure) {
+        try {
+          const exp = await ketcherRef.current.getSelectedOrFullStructure();
+          const s = (exp.smiles || '').trim();
+          if (s) {
+            setSmiles(s);
+            if (style !== '2d') setMol3dInput(s);
+            setStatus(
+              exp.selectedOnly
+                ? 'Converted selected structure to SMILES'
+                : 'Converted canvas structure to SMILES',
+            );
+            return;
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+
+      const k = ketcherRef.current;
+      if (k) {
+        try {
+          const s = (await k.getSmiles()).trim();
+          if (s) {
+            setSmiles(s);
+            if (style !== '2d') setMol3dInput(s);
+            setStatus('Converted canvas structure to SMILES');
+            return;
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+
+      const fallback = (mol3dInput || smiles).trim();
+      if (style !== '2d' && fallback) {
+        setSmiles(fallback);
+        setStatus('Filled SMILES from the current 3D structure');
+        return;
+      }
+
+      setStatus('No structure on canvas — draw or select one first');
+    } catch (e) {
+      console.error(e);
+      setStatus('Could not convert structure to SMILES');
+    } finally {
+      setBusy(false);
+    }
+  }, [mol3dInput, smiles, style]);
 
   /**
    * Capture the *current* 3D camera as transparent PNG for BioArtist.
@@ -946,9 +1063,6 @@ export function ChemStudio() {
           placeholder="Name"
         />
         <div className="ba-chem-studio-actions">
-          <button type="button" className="ba-btn ba-btn-sm" onClick={() => void syncFromKetcher()}>
-            Sync SMILES
-          </button>
           <button
             type="button"
             className="ba-btn ba-btn-sm"
@@ -989,7 +1103,7 @@ export function ChemStudio() {
         <section className="ba-chem-studio-editor">
           <div className="ba-chem-studio-section-label">
             {style === '2d'
-              ? '2D ACS · ⌘/Ctrl+drag marquee (any tool) · Rectangle tool: plain drag · right-click → Copy for figure'
+              ? '2D ACS · drag to marquee-select · click structure to select · eraser/bond keep native drag · right-click → Copy'
               : `Viewing ${
                   style === 'ballstick'
                     ? 'ball & stick'
@@ -1107,10 +1221,10 @@ export function ChemStudio() {
                   }}
                   onReady={(api) => {
                     ketcherRef.current = api;
-                    // Default: structure select + hover; marquee = ⌘/Ctrl+drag (any tool); Rectangle tool also plain drag
+                    // Default: structure select + hover; plain drag marquees unless eraser/bond
                     api.setSelectStructure();
                     setStatus(
-                      'Ketcher ready — click structure to select · drag to move (snaps) · ⌘/Ctrl+drag marquee any tool · Rectangle tool: plain drag marquee',
+                      'Ketcher ready — click to select · empty-canvas drag to marquee · drag selection (molecule/arrow/plus) to move',
                     );
                   }}
                   onError={() => {
@@ -1198,9 +1312,41 @@ export function ChemStudio() {
             className="ba-chem-smiles-input"
             value={smiles}
             onChange={(e) => setSmiles(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                if (!busy) void convertSmilesToStructure();
+              }
+            }}
             spellCheck={false}
-            placeholder="SMILES of current structure"
+            placeholder="Enter SMILES, then SMILES to structure"
+            title="Enter SMILES and press Enter (or use SMILES to structure)"
+            disabled={busy}
           />
+          <div className="ba-chem-smiles-actions">
+            <button
+              type="button"
+              className="ba-btn ba-btn-primary ba-btn-sm"
+              disabled={busy}
+              title="Read the selected structure (or whole canvas) and fill the SMILES field"
+              onClick={() => void convertStructureToSmiles()}
+            >
+              Structure to SMILES
+            </button>
+            <button
+              type="button"
+              className="ba-btn ba-btn-primary ba-btn-sm"
+              disabled={busy || !smiles.trim()}
+              title="Parse SMILES and place the structure on the canvas in the selected display style"
+              onClick={() => void convertSmilesToStructure()}
+            >
+              SMILES to structure
+            </button>
+          </div>
+          <p className="ba-chem-studio-style-note" style={{ margin: '4px 12px 8px' }}>
+            Enter runs SMILES to structure. Select a molecule, then Structure to SMILES to fill the
+            field.
+          </p>
 
           <div className="ba-chem-studio-section-label">Favorites</div>
           <button

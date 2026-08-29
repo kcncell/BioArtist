@@ -7,7 +7,6 @@ import {
   deleteSelection,
   duplicateSelection,
   endCropMode,
-  exportJSON,
   groupSelection,
   hasObjectClipboard,
   isCropModeActive,
@@ -27,7 +26,7 @@ import {
   resolveChemStudioOrClipboard,
   snapshotClipboard,
 } from '../../lib/clipboardPaste';
-import { downloadText } from '../../lib/export';
+import { saveActiveProject, saveActiveProjectAs } from '../../lib/saveProject';
 import { useAppStore } from '../../store/appStore';
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -143,16 +142,8 @@ export function KeyboardShortcuts() {
 
       if (mod && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        const data = exportJSON();
-        const name = useAppStore.getState().projectName;
-        if (data) {
-          downloadText(
-            `${name.replace(/[^\w\-]+/g, '_') || 'figure'}.ba`,
-            JSON.stringify({ ...data, projectName: name }, null, 2),
-            'application/json',
-          );
-          useAppStore.getState().showToast('Project saved');
-        }
+        if (e.shiftKey) void saveActiveProjectAs();
+        else void saveActiveProject();
         return;
       }
 

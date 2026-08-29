@@ -9,6 +9,8 @@ import {
   importJSON,
   setArtboardSize as setCanvasArtboard,
 } from './canvasController';
+import { unbindHandleForDocument } from './projectFile';
+import { flushSessionDraft } from './sessionDraft';
 import { useAppStore } from '../store/appStore';
 import type { OpenDocument } from '../types';
 
@@ -70,8 +72,15 @@ export async function switchToDocument(docId: string): Promise<boolean> {
   useAppStore.getState().setArtboardSize(target.artboardWidth, target.artboardHeight);
   useAppStore.getState().setProjectName(target.name);
   useAppStore.getState().setActiveDocumentId(docId);
+  useAppStore.getState().setAutosaveStatus({
+    draftAt: useAppStore.getState().autosaveStatus.draftAt,
+    diskAt: target.lastDiskSavedAt ?? null,
+    fileName: target.fileName ?? null,
+    message: null,
+  });
   fitToScreen();
   window.dispatchEvent(new Event('resize'));
+  void flushSessionDraft();
   return true;
 }
 
@@ -93,6 +102,9 @@ export async function createNewDocument(opts: {
     snapshot: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    dirty: true,
+    fileName: null,
+    lastDiskSavedAt: null,
   };
 
   setCanvasArtboard(opts.width, opts.height);
@@ -101,37 +113,54 @@ export async function createNewDocument(opts: {
   useAppStore.getState().setProjectName(doc.name);
   useAppStore.getState().setOpenDocuments([...state.openDocuments, doc]);
   useAppStore.getState().setActiveDocumentId(doc.id);
+  useAppStore.getState().setAutosaveStatus({
+    draftAt: null,
+    diskAt: null,
+    fileName: null,
+    message: 'New figure — draft will autosave',
+  });
   fitToScreen();
   window.dispatchEvent(new Event('resize'));
+  void flushSessionDraft();
   return doc;
 }
 
 /** Open a .ba file as a new tab (does not replace other open docs). */
-export async function openDocumentFromFile(data: {
-  projectName?: string;
-  artboard?: { width: number; height: number };
-  canvas?: unknown;
-  version?: number;
-}): Promise<OpenDocument | null> {
+export async function openDocumentFromFile(
+  data: {
+    projectName?: string;
+    artboard?: { width: number; height: number };
+    canvas?: unknown;
+    version?: number;
+  },
+  opts?: { fileName?: string | null },
+): Promise<OpenDocument | null> {
   if (!data.canvas) return null;
   snapshotActiveDocument();
 
   const w = data.artboard?.width || 900;
   const h = data.artboard?.height || 600;
   const state = useAppStore.getState();
+  const baseName =
+    data.projectName ||
+    opts?.fileName?.replace(/\.ba$/i, '') ||
+    `Opened ${state.openDocuments.length + 1}`;
   const doc: OpenDocument = {
     id: uid(),
-    name: data.projectName || `Opened ${state.openDocuments.length + 1}`,
+    name: baseName,
     artboardWidth: w,
     artboardHeight: h,
     snapshot: {
       version: data.version ?? 1,
       artboard: data.artboard || { width: w, height: h },
       canvas: data.canvas,
-      projectName: data.projectName,
+      projectName: data.projectName || baseName,
     },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    dirty: false,
+    fileName: opts?.fileName ?? null,
+    lastDiskSavedAt: opts?.fileName ? new Date().toISOString() : null,
   };
 
   await importJSON({
@@ -142,8 +171,15 @@ export async function openDocumentFromFile(data: {
   useAppStore.getState().setProjectName(doc.name);
   useAppStore.getState().setOpenDocuments([...state.openDocuments, doc]);
   useAppStore.getState().setActiveDocumentId(doc.id);
+  useAppStore.getState().setAutosaveStatus({
+    draftAt: null,
+    diskAt: doc.lastDiskSavedAt ?? null,
+    fileName: doc.fileName ?? null,
+    message: doc.fileName ? null : 'Opened — Save to enable file autosave',
+  });
   fitToScreen();
   window.dispatchEvent(new Event('resize'));
+  void flushSessionDraft();
   return doc;
 }
 
@@ -160,6 +196,7 @@ export async function closeDocument(docId: string): Promise<boolean> {
   if (remaining.length === state.openDocuments.length) return false;
 
   useAppStore.getState().setOpenDocuments(remaining);
+  void unbindHandleForDocument(docId);
 
   if (docId === state.activeDocumentId) {
     const next = remaining[remaining.length - 1];
@@ -179,9 +216,16 @@ export async function closeDocument(docId: string): Promise<boolean> {
     }
     useAppStore.getState().setArtboardSize(next.artboardWidth, next.artboardHeight);
     useAppStore.getState().setProjectName(next.name);
+    useAppStore.getState().setAutosaveStatus({
+      draftAt: useAppStore.getState().autosaveStatus.draftAt,
+      diskAt: next.lastDiskSavedAt ?? null,
+      fileName: next.fileName ?? null,
+      message: null,
+    });
     fitToScreen();
     window.dispatchEvent(new Event('resize'));
   }
+  void flushSessionDraft();
   return true;
 }
 
@@ -204,5 +248,28 @@ export function createInitialDocument(): OpenDocument {
     snapshot: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    dirty: true,
+    fileName: null,
+    lastDiskSavedAt: null,
   };
+}
+
+/** Apply a restored session draft to the store + canvas (caller imports JSON). */
+export function applySessionDocuments(
+  docs: OpenDocument[],
+  activeId: string,
+): OpenDocument | null {
+  if (!docs.length) return null;
+  const active = docs.find((d) => d.id === activeId) || docs[0];
+  useAppStore.getState().setOpenDocuments(docs);
+  useAppStore.getState().setActiveDocumentId(active.id);
+  useAppStore.getState().setProjectName(active.name);
+  useAppStore.getState().setArtboardSize(active.artboardWidth, active.artboardHeight);
+  useAppStore.getState().setAutosaveStatus({
+    draftAt: new Date().toISOString(),
+    diskAt: active.lastDiskSavedAt ?? null,
+    fileName: active.fileName ?? null,
+    message: 'Session restored',
+  });
+  return active;
 }

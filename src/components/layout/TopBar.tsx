@@ -13,14 +13,17 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { exportJSON } from '../../lib/canvasController';
 import {
   closeDocument,
   openDocumentFromFile,
-  snapshotActiveDocument,
   switchToDocument,
 } from '../../lib/documentManager';
-import { downloadText } from '../../lib/export';
+import { MAX_GLASS_OPACITY } from '../../lib/glassTheme';
+import {
+  bindHandleToDocument,
+  openProjectWithPicker,
+} from '../../lib/projectFile';
+import { saveActiveProject, saveActiveProjectAs } from '../../lib/saveProject';
 import { useAppStore } from '../../store/appStore';
 import { NewDocumentDialog } from './NewDocumentDialog';
 
@@ -89,43 +92,37 @@ export function TopBar() {
   }, [docsOpen, closeDocs]);
 
   const onSave = () => {
-    snapshotActiveDocument();
-    const data = exportJSON();
-    if (!data) return;
-    const payload = {
-      ...data,
-      projectName,
-      savedAt: new Date().toISOString(),
-    };
-    downloadText(
-      `${projectName.replace(/[^\w\-]+/g, '_') || 'figure'}.ba`,
-      JSON.stringify(payload, null, 2),
-      'application/json',
-    );
-    showToast('Project saved');
+    void saveActiveProject();
+  };
+
+  const onSaveAs = () => {
+    void saveActiveProjectAs();
   };
 
   const onOpen = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.ba,.bioartist,application/json';
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
+    void (async () => {
       try {
-        const text = await file.text();
-        const data = JSON.parse(text);
-        const doc = await openDocumentFromFile(data);
-        if (doc) {
-          showToast(`Opened “${doc.name}” as a new tab`);
-        } else {
+        const picked = await openProjectWithPicker();
+        if (!picked) return;
+        const doc = await openDocumentFromFile(picked.data, {
+          fileName: picked.fileName,
+        });
+        if (!doc) {
           showToast('Could not open project file');
+          return;
         }
+        if (picked.handle) {
+          await bindHandleToDocument(doc.id, picked.handle);
+        }
+        showToast(
+          picked.handle
+            ? `Opened “${doc.name}” — autosave linked to ${picked.fileName}`
+            : `Opened “${doc.name}” as a new tab`,
+        );
       } catch {
         showToast('Could not open project file');
       }
-    };
-    input.click();
+    })();
   };
 
   return (
@@ -193,7 +190,13 @@ export function TopBar() {
                           });
                         }}
                       >
-                        <span className="ba-docs-menu-name">{d.name}</span>
+                        <span className="ba-docs-menu-name">
+                          {d.dirty ? '• ' : ''}
+                          {d.name}
+                          {d.fileName ? (
+                            <span className="ba-docs-menu-file"> · {d.fileName}</span>
+                          ) : null}
+                        </span>
                         <span className="ba-docs-menu-size">
                           {d.artboardWidth}×{d.artboardHeight}
                         </span>
@@ -257,7 +260,14 @@ export function TopBar() {
             <FolderOpen size={15} />
             <span className="ba-topbar-label">Open</span>
           </button>
-          <button className="ba-btn" title="Save project (⌘S)" onClick={onSave}>
+          <button
+            className="ba-btn"
+            title="Save to linked .ba file (⌘S). Shift-click for Save As"
+            onClick={(e) => {
+              if (e.shiftKey) onSaveAs();
+              else onSave();
+            }}
+          >
             <Save size={15} />
             <span className="ba-topbar-label">Save</span>
           </button>
@@ -295,11 +305,11 @@ export function TopBar() {
             <input
               type="range"
               min={0}
-              max={1}
+              max={MAX_GLASS_OPACITY}
               step={0.01}
-              value={glassOpacity}
+              value={Math.min(MAX_GLASS_OPACITY, glassOpacity)}
               onChange={(e) => setGlassOpacity(Number(e.target.value))}
-              aria-label="Glass opacity 0 to 100 percent"
+              aria-label="Glass opacity 0 to 50 percent"
             />
           </label>
           <div className="ba-glass-control-divider" aria-hidden />

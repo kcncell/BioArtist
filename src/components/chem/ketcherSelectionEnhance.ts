@@ -2,8 +2,11 @@
  * Chem Studio selection layer on top of Ketcher:
  * - Structure select by default (click molecule / its interior → whole connected component)
  * - Hover previews the same target that a click would select
- * - ⌘/Ctrl + drag → rectangle marquee **from any tool** (bond/atom/etc.)
- * - Rectangle (or lasso) select tool → plain left-drag marquee as well as ⌘/Ctrl+drag
+ * - Plain left-drag → rectangle marquee from almost any tool (including Rectangle select
+ *   and Structure select), starting on blank canvas **or** on a structure
+ * - Exceptions: eraser and bond/chain drawing tools keep native drag (draw / erase)
+ * - ⌘/Ctrl + drag → marquee from **any** tool (including eraser / bond)
+ * - Drag on an existing selection while Select is active → structure move (not marquee)
  *
  * Ketcher binds mousedown/mousemove/mouseup (not pointer events), so we intercept
  * those in the capture phase with stopImmediatePropagation for the marquee gesture.
@@ -89,11 +92,26 @@ function getSelectMode(editor: EditorLike): SelectMode | null {
   return null;
 }
 
-/** Rectangle or freeform lasso: plain drag should marquee without ⌘/Ctrl. */
+/** Rectangle or freeform lasso select sub-mode. */
 function isAreaSelectMode(editor: EditorLike): boolean {
   if (!isSelectTool(editor)) return false;
   const mode = getSelectMode(editor);
   return mode === 'rectangle' || mode === 'lasso';
+}
+
+function getLastToolName(editor: EditorLike): string {
+  ensureSelectModeTracking(editor);
+  return lastToolByEditor.get(editor)?.name ?? '';
+}
+
+/**
+ * Tools that need native left-drag (do not steal for marquee unless ⌘/Ctrl).
+ * - eraser: drag-erase
+ * - bond / chain: drag to draw bonds / carbon chains ("multiple bond buttons")
+ */
+function blocksPlainMarquee(editor: EditorLike): boolean {
+  const name = getLastToolName(editor);
+  return name === 'eraser' || name === 'erase' || name === 'bond' || name === 'chain';
 }
 
 /** True when pointer is over a drawable structure item (not blank canvas). */
@@ -105,6 +123,131 @@ function hitStructureItem(editor: EditorLike, event: MouseEvent): boolean {
       null,
     );
     return !!hit;
+  } catch {
+    return false;
+  }
+}
+
+function selectionHasAnything(sel: {
+  atoms?: number[];
+  bonds?: number[];
+  rxnArrows?: number[];
+  rxnPluses?: number[];
+  texts?: number[];
+  simpleObjects?: number[];
+} | null): boolean {
+  if (!sel) return false;
+  return !!(
+    sel.atoms?.length ||
+    sel.bonds?.length ||
+    sel.rxnArrows?.length ||
+    sel.rxnPluses?.length ||
+    sel.texts?.length ||
+    sel.simpleObjects?.length
+  );
+}
+
+/** True when pointer is on the current selection (atoms, arrows, pluses, texts, …). */
+function isPointerOnSelection(editor: EditorLike, event: MouseEvent): boolean {
+  try {
+    const sel = editor.selection?.();
+    if (!selectionHasAnything(sel)) return false;
+    const atomSet = new Set<number>(sel.atoms || []);
+    const bondSet = new Set<number>(sel.bonds || []);
+    const arrowSet = new Set<number>(sel.rxnArrows || []);
+    const plusSet = new Set<number>(sel.rxnPluses || []);
+    const textSet = new Set<number>(sel.texts || []);
+
+    const hit = editor.findItem?.(
+      event,
+      ['atoms', 'bonds', 'frags', 'sgroups', 'functionalGroups', 'rxnArrows', 'rxnPluses', 'texts'],
+      null,
+    );
+    if (!hit) return false;
+    if (hit.map === 'atoms' && atomSet.has(hit.id)) return true;
+    if (hit.map === 'bonds' && bondSet.has(hit.id)) return true;
+    if (hit.map === 'rxnArrows' && arrowSet.has(hit.id)) return true;
+    if (hit.map === 'rxnPluses' && plusSet.has(hit.id)) return true;
+    if (hit.map === 'texts' && textSet.has(hit.id)) return true;
+    if (hit.map === 'frags') {
+      const mol = editor.render?.ctab?.molecule;
+      const ctab = editor.render?.ctab;
+      const refrag = ctab?.frags?.get?.(hit.id);
+      const atoms: number[] = refrag?.fragGetAtoms?.(ctab, hit.id) || [];
+      if (atoms.some((id) => atomSet.has(id))) return true;
+      if (mol?.atoms) {
+        let found = false;
+        mol.atoms.forEach((atom: { fragment?: number }, id: number) => {
+          if (!found && atomSet.has(id) && atom.fragment === hit.id) found = true;
+        });
+        if (found) return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/** Click-select a single arrow / plus / text / fragment under the pointer. */
+function selectItemUnderPointer(
+  editor: EditorLike,
+  event: MouseEvent,
+  additive: boolean,
+): boolean {
+  try {
+    const hit = editor.findItem?.(
+      event,
+      ['atoms', 'bonds', 'frags', 'sgroups', 'functionalGroups', 'rxnArrows', 'rxnPluses', 'texts'],
+      null,
+    );
+    if (!hit) return false;
+
+    const prev = additive ? editor.selection() || {} : {};
+    if (hit.map === 'rxnArrows') {
+      editor.selection({
+        ...(additive ? prev : {}),
+        rxnArrows: additive
+          ? [...new Set([...(prev.rxnArrows || []), hit.id])]
+          : [hit.id],
+      });
+      return true;
+    }
+    if (hit.map === 'rxnPluses') {
+      editor.selection({
+        ...(additive ? prev : {}),
+        rxnPluses: additive
+          ? [...new Set([...(prev.rxnPluses || []), hit.id])]
+          : [hit.id],
+      });
+      return true;
+    }
+    if (hit.map === 'texts') {
+      editor.selection({
+        ...(additive ? prev : {}),
+        texts: additive ? [...new Set([...(prev.texts || []), hit.id])] : [hit.id],
+      });
+      return true;
+    }
+
+    const fragId = fragmentIdFromHit(editor, hit) ?? resolveFragmentUnderPointer(editor, event);
+    if (fragId == null) return false;
+    if (additive) {
+      const ctab = editor.render.ctab;
+      const refrag = ctab.frags.get(fragId);
+      const atoms: number[] = refrag?.fragGetAtoms?.(ctab, fragId) || [];
+      const bonds: number[] = refrag?.fragGetBonds?.(ctab, fragId) || [];
+      editor.selection({
+        atoms: [...new Set([...(prev.atoms || []), ...atoms])],
+        bonds: [...new Set([...(prev.bonds || []), ...bonds])],
+        rxnArrows: prev.rxnArrows || [],
+        rxnPluses: prev.rxnPluses || [],
+        texts: prev.texts || [],
+      });
+    } else {
+      selectFragment(editor, fragId);
+    }
+    return true;
   } catch {
     return false;
   }
@@ -204,11 +347,28 @@ function hoverFragment(editor: EditorLike, fragId: number | null, event?: MouseE
   }
 }
 
+function pointInRect(
+  x: number,
+  y: number,
+  minX: number,
+  maxX: number,
+  minY: number,
+  maxY: number,
+): boolean {
+  return x >= minX && x <= maxX && y >= minY && y <= maxY;
+}
+
 function selectionInModelRect(
   editor: EditorLike,
   a: { x: number; y: number },
   b: { x: number; y: number },
-): { atoms: number[]; bonds: number[] } {
+): {
+  atoms: number[];
+  bonds: number[];
+  rxnArrows?: number[];
+  rxnPluses?: number[];
+  texts?: number[];
+} {
   const minX = Math.min(a.x, b.x);
   const maxX = Math.max(a.x, b.x);
   const minY = Math.min(a.y, b.y);
@@ -219,7 +379,7 @@ function selectionInModelRect(
 
   mol.atoms.forEach((atom: { pp: { x: number; y: number } }, id: number) => {
     const { x, y } = atom.pp;
-    if (x >= minX && x <= maxX && y >= minY && y <= maxY) {
+    if (pointInRect(x, y, minX, maxX, minY, maxY)) {
       atoms.push(id);
       atomSet.add(id);
     }
@@ -232,7 +392,57 @@ function selectionInModelRect(
     }
   });
 
-  return { atoms, bonds };
+  const rxnArrows: number[] = [];
+  try {
+    mol.rxnArrows?.forEach?.(
+      (arrow: { pos?: Array<{ x: number; y: number }>; center?: () => { x: number; y: number } }, id: number) => {
+        const pts = arrow.pos || [];
+        const hit =
+          pts.some((p) => pointInRect(p.x, p.y, minX, maxX, minY, maxY)) ||
+          (typeof arrow.center === 'function' &&
+            (() => {
+              const c = arrow.center!();
+              return pointInRect(c.x, c.y, minX, maxX, minY, maxY);
+            })());
+        if (hit) rxnArrows.push(id);
+      },
+    );
+  } catch {
+    /* optional */
+  }
+
+  const rxnPluses: number[] = [];
+  try {
+    mol.rxnPluses?.forEach?.(
+      (plus: { pp?: { x: number; y: number } }, id: number) => {
+        if (plus.pp && pointInRect(plus.pp.x, plus.pp.y, minX, maxX, minY, maxY)) {
+          rxnPluses.push(id);
+        }
+      },
+    );
+  } catch {
+    /* optional */
+  }
+
+  const texts: number[] = [];
+  try {
+    mol.texts?.forEach?.(
+      (text: { position?: { x: number; y: number }; pos?: Array<{ x: number; y: number }> }, id: number) => {
+        const p = text.position || text.pos?.[0];
+        if (p && pointInRect(p.x, p.y, minX, maxX, minY, maxY)) texts.push(id);
+      },
+    );
+  } catch {
+    /* optional */
+  }
+
+  return {
+    atoms,
+    bonds,
+    ...(rxnArrows.length ? { rxnArrows } : {}),
+    ...(rxnPluses.length ? { rxnPluses } : {}),
+    ...(texts.length ? { texts } : {}),
+  };
 }
 
 function ensureMarqueeEl(): HTMLDivElement {
@@ -307,8 +517,8 @@ export type SelectionEnhanceHandle = {
 
 /**
  * Install hover preview, structure-click, and marquee on the Ketcher host root.
- * - ⌘/Ctrl+drag marquee works from **any** active tool
- * - With Rectangle (or Lasso) select active, plain left-drag also marquees (blank canvas)
+ * - Plain left-drag marquee from most tools (see blocksPlainMarquee)
+ * - ⌘/Ctrl+drag marquee from **any** tool
  */
 export function installKetcherSelectionEnhance(
   root: HTMLElement,
@@ -324,6 +534,8 @@ export function installKetcherSelectionEnhance(
     additive: boolean;
     /** true when gesture started with ⌘/Ctrl (any tool) */
     fromMod: boolean;
+    /** Tool name when the gesture began (for click-replay). */
+    toolName: string;
   } | null = null;
 
   const bindEditor = (ketcher: KetcherLike) => {
@@ -353,6 +565,7 @@ export function installKetcherSelectionEnhance(
         active: false,
         additive: e.shiftKey,
         fromMod,
+        toolName: getLastToolName(editor),
       };
       document.body.classList.add('ba-ketcher-marquee-active');
       try {
@@ -368,6 +581,19 @@ export function installKetcherSelectionEnhance(
     }
   };
 
+  /** Replay a simple click into the active tool (atom place, etc.) after a no-drag gesture. */
+  const replayToolClick = (editor: EditorLike, event: MouseEvent) => {
+    try {
+      const tool = editor.tool?.();
+      if (!tool) return;
+      if (typeof tool.mousedown === 'function') tool.mousedown(event);
+      if (typeof tool.mouseup === 'function') tool.mouseup(event);
+      else if (typeof tool.click === 'function') tool.click(event);
+    } catch (err) {
+      console.warn('[ChemStudio] tool click replay failed', err);
+    }
+  };
+
   const endMarquee = (event: MouseEvent | null, commit: boolean) => {
     if (!marquee) return;
     const editor = getEditor(getKetcher());
@@ -379,31 +605,54 @@ export function installKetcherSelectionEnhance(
     if (!commit || !editor || !event) return;
 
     if (!state.active) {
-      // Click without drag
+      // Click without drag — select molecule / arrow / plus / text under cursor
       if (state.fromMod) {
-        const fragId = resolveFragmentUnderPointer(editor, event);
-        if (fragId != null) selectFragment(editor, fragId);
-      } else if (!state.additive) {
-        // Rectangle/lasso blank click: clear selection (native Ketcher behavior)
-        try {
-          editor.selection(null);
-        } catch {
-          /* ignore */
-        }
+        selectItemUnderPointer(editor, event, false);
+        return;
       }
+
+      const onSelect = isSelectTool(editor) || state.toolName === 'select';
+      if (onSelect) {
+        const selected = selectItemUnderPointer(editor, event, state.additive);
+        if (!selected && !state.additive) {
+          try {
+            editor.selection(null);
+          } catch {
+            /* ignore */
+          }
+        }
+        return;
+      }
+
+      // Non-select tool (atom, charge, …): we stole mousedown — replay click
+      replayToolClick(editor, event);
       return;
     }
 
     try {
       const model1 = CoordinateTransformation.pageToModel(event, editor.render);
       const sel = selectionInModelRect(editor, state.model0, model1);
+      const hasAny =
+        sel.atoms.length ||
+        sel.bonds.length ||
+        sel.rxnArrows?.length ||
+        sel.rxnPluses?.length ||
+        sel.texts?.length;
       if (state.additive && editor.selection()) {
         const prev = editor.selection() || {};
-        const atomSet = new Set<number>([...(prev.atoms || []), ...sel.atoms]);
-        const bondSet = new Set<number>([...(prev.bonds || []), ...sel.bonds]);
-        editor.selection({ atoms: [...atomSet], bonds: [...bondSet] });
+        editor.selection({
+          atoms: [...new Set([...(prev.atoms || []), ...sel.atoms])],
+          bonds: [...new Set([...(prev.bonds || []), ...sel.bonds])],
+          rxnArrows: [
+            ...new Set([...(prev.rxnArrows || []), ...(sel.rxnArrows || [])]),
+          ],
+          rxnPluses: [
+            ...new Set([...(prev.rxnPluses || []), ...(sel.rxnPluses || [])]),
+          ],
+          texts: [...new Set([...(prev.texts || []), ...(sel.texts || [])])],
+        });
       } else {
-        editor.selection(sel.atoms.length || sel.bonds.length ? sel : null);
+        editor.selection(hasAny ? sel : null);
       }
     } catch (err) {
       console.warn('[ChemStudio] marquee select failed', err);
@@ -413,9 +662,10 @@ export function installKetcherSelectionEnhance(
   /**
    * Start marquee when:
    * - ⌘/Ctrl + mousedown from **any** tool, or
-   * - plain mousedown on blank canvas while Rectangle/Lasso select is active
+   * - plain left mousedown from any tool except eraser / bond / chain
+   *   (and except drag-on-selection while Select is active → structure move)
    *
-   * Capture + stopImmediatePropagation so bond/atom tools never receive the gesture.
+   * Capture + stopImmediatePropagation so native tools do not steal the gesture.
    */
   const onMouseDownCapture = (e: MouseEvent) => {
     if (e.button !== 0) return;
@@ -436,11 +686,14 @@ export function installKetcherSelectionEnhance(
       return;
     }
 
-    // Plain left-drag marquee only in rectangle/lasso select mode, and only on blank
-    // (on structure: keep click-to-select / structure-move).
-    if (!isAreaSelectMode(editor)) return;
-    if (hitStructureItem(editor, e)) return;
+    // Eraser + bond/chain keep native left-drag
+    if (blocksPlainMarquee(editor)) return;
 
+    // Already-selected item under cursor → let structure-move drag it
+    // (molecules, reaction arrows, pluses, text labels)
+    if (isPointerOnSelection(editor, e)) return;
+
+    // Empty canvas (or unselected area) → rectangle marquee
     beginMarquee(e, editor, false);
   };
 

@@ -2,14 +2,17 @@
 
 export type ThemeMode = 'dark' | 'light';
 
+/** Glass opacity slider max — above this, panel text becomes hard to read. */
+export const MAX_GLASS_OPACITY = 0.5;
+
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
 }
 
 /**
  * Sharp frosted liquid glass.
- * opacity: 0–1 (0–100%) · hue: 0–359 · mode: dark | light
- * Both modes respond strongly to opacity (frost) and hue (tint).
+ * opacity: 0–0.5 (0–50% frost) · hue: 0–359 · mode: dark | light
+ * Both modes respond to opacity (frost) and hue (tint).
  */
 export function applyGlassTheme(
   opacity: number,
@@ -18,7 +21,7 @@ export function applyGlassTheme(
 ) {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
-  const o = clamp(opacity, 0, 1);
+  const o = clamp(opacity, 0, MAX_GLASS_OPACITY);
   const h = ((Math.round(hue) % 360) + 360) % 360;
   const dark = mode === 'dark';
 
@@ -40,7 +43,7 @@ export function applyGlassTheme(
     );
     root.style.setProperty('--ba-canvas-bg', '#12141a');
 
-    // Frosted panes — clear at 0, nearly solid at 100%
+    // Frosted panes — clear at 0, denser frost at 50% cap
     const surfaceA = 0.18 + o * 0.8; // 0.18 → 0.98
     root.style.setProperty(
       '--ba-surface',
@@ -105,7 +108,7 @@ export function applyGlassTheme(
   } else {
     /*
      * Light theme — opacity + hue must be obviously visible:
-     *  - opacity: clear glass → dense frosted panes (up to 100%)
+     *  - opacity: clear glass → denser frost (capped at 50%)
      *  - hue: tints stage glow, surfaces, accents, borders
      */
     const bgSat = 14 + o * 14;

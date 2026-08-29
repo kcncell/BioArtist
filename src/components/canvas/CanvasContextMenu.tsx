@@ -13,6 +13,7 @@ import {
   Scissors,
   Star,
   Trash2,
+  Type,
   Ungroup,
 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
@@ -20,6 +21,7 @@ import {
   beginCropMode,
   bringForward,
   bringToFront,
+  convertSelectionToTextBox,
   copySelectionToClipboard,
   cutSelectionToClipboard,
   deleteSelection,
@@ -34,6 +36,7 @@ import {
   removeSolidBackgroundFromSelection,
   resetSelectionCrop,
   selectionAsLibraryIcon,
+  selectionIsConvertibleShape,
   selectionIsCroppable,
   selectionIsGroup,
   selectionIsRasterImage,
@@ -79,6 +82,7 @@ export function CanvasContextMenu({ menu, onClose }: Props) {
   const canRemoveBgRef = useRef(false);
   const canCropRef = useRef(false);
   const inCropModeRef = useRef(false);
+  const canConvertTextBoxRef = useRef(false);
 
   if (menu) {
     const count = getSelectionCount();
@@ -88,6 +92,7 @@ export function CanvasContextMenu({ menu, onClose }: Props) {
     canRemoveBgRef.current = selectionIsRasterImage();
     canCropRef.current = selectionIsCroppable();
     inCropModeRef.current = isCropModeActive();
+    canConvertTextBoxRef.current = selectionIsConvertibleShape();
   }
 
   useEffect(() => {
@@ -128,6 +133,7 @@ export function CanvasContextMenu({ menu, onClose }: Props) {
   const canRemoveBg = canRemoveBgRef.current;
   const canCrop = canCropRef.current;
   const inCropMode = inCropModeRef.current;
+  const canConvertTextBox = canConvertTextBoxRef.current;
 
   /** Run a sync canvas action, then close the menu. */
   const act = (label: string, fn: () => void) => {
@@ -307,6 +313,23 @@ export function CanvasContextMenu({ menu, onClose }: Props) {
             <Copy size={14} /> Duplicate
             <span className="ba-ctx-kbd">⌘D</span>
           </button>
+
+          {canConvertTextBox && (
+            <button
+              type="button"
+              role="menuitem"
+              onPointerDown={(e) => e.stopPropagation()}
+              title="Type inside this shape — keeps ellipse, diamond, etc."
+              onClick={() =>
+                act('Edit text in shape', () => {
+                  const ok = convertSelectionToTextBox();
+                  if (!ok) throw new Error('Could not edit text');
+                })
+              }
+            >
+              <Type size={14} /> Edit text inside
+            </button>
+          )}
 
           <Sep />
           <button
