@@ -80,8 +80,13 @@ export async function saveProjectAs(
     downloadText(`${name}.ba`, JSON.stringify(payload, null, 2), 'application/json');
     return null;
   }
+  const savePicker = window.showSaveFilePicker;
+  if (!savePicker) {
+    downloadText(`${name}.ba`, JSON.stringify(payload, null, 2), 'application/json');
+    return null;
+  }
   try {
-    const handle = await window.showSaveFilePicker({
+    const handle = await savePicker({
       suggestedName: `${name}.ba`,
       types: BA_ACCEPT,
     });
@@ -99,9 +104,10 @@ export async function openProjectWithPicker(): Promise<{
   handle: FileSystemFileHandle | null;
   fileName: string;
 } | null> {
-  if (canUseFileSystemAccess()) {
+  const openPicker = window.showOpenFilePicker;
+  if (openPicker) {
     try {
-      const [handle] = await window.showOpenFilePicker({
+      const [handle] = await openPicker({
         multiple: false,
         types: BA_ACCEPT,
       });

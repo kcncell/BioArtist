@@ -133,7 +133,7 @@ export function FabricCanvas() {
             session.activeDocumentId,
           );
           const snap = active?.snapshot;
-          if (snap?.canvas) {
+          if (active && snap?.canvas) {
             await importJSON({
               canvas: snap.canvas,
               artboard: snap.artboard || {

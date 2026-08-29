@@ -114,19 +114,7 @@ function blocksPlainMarquee(editor: EditorLike): boolean {
   return name === 'eraser' || name === 'erase' || name === 'bond' || name === 'chain';
 }
 
-/** True when pointer is over a drawable structure item (not blank canvas). */
-function hitStructureItem(editor: EditorLike, event: MouseEvent): boolean {
-  try {
-    const hit = editor.findItem?.(
-      event,
-      ['atoms', 'bonds', 'frags', 'sgroups', 'functionalGroups', 'rgroups', 'texts', 'rxnArrows', 'rxnPluses'],
-      null,
-    );
-    return !!hit;
-  } catch {
-    return false;
-  }
-}
+
 
 function selectionHasAnything(sel: {
   atoms?: number[];
