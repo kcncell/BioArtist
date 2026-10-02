@@ -159,14 +159,6 @@ Open the URL Vite prints (usually `http://localhost:5173`).
 - **Figure editor:** `/`
 - **Chem Studio** (Ketcher sketcher): `/chem`
 
-## Docs for researchers
-
-| Doc | Audience |
-|-----|----------|
-| **[docs/BROWSER.md](./docs/BROWSER.md)** | How to run and use the web app |
-| **[docs/MCP.md](./docs/MCP.md)** | Desktop AI → generate SVGs → Sync inbox |
-| **[docs/DISTRIBUTION.md](./docs/DISTRIBUTION.md)** | Share with your lab / collaborators |
-
 ### External icon packs
 
 - **Bioicons** (left rail) — install the open catalog (license per icon; SVG via CDN). Rebuild catalog: `npm run packs:bioicons` (needs a local [bioicons](https://github.com/duerrsimon/bioicons) clone).
@@ -174,7 +166,7 @@ Open the URL Vite prints (usually `http://localhost:5173`).
 
 ## MCP: create SVGs from a desktop AI app
 
-Yes — supported. Start with **[docs/MCP.md](./docs/MCP.md)** (technical notes also in [mcp-server/README.md](./mcp-server/README.md)).
+Yes — supported. Setup notes are in [mcp-server/README.md](./mcp-server/README.md).
 
 ```bash
 npm run mcp:install

@@ -364,7 +364,7 @@ export function TemplatesPanel() {
             </div>
             <p className="ba-panel-sub" style={{ padding: '8px 0 0' }}>
               Setup: <code>npm run mcp:install</code> then point Claude / Codex / Grok at{' '}
-              <code>mcp-server/src/index.js</code>. See <code>docs/MCP.md</code>.
+              <code>mcp-server/src/index.js</code>. Details are in <code>mcp-server/README.md</code>.
             </p>
             <div className="ba-modal-actions">
               <button className="ba-btn ba-btn-primary" onClick={() => setMcpOpen(false)}>

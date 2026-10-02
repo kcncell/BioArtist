@@ -51,3 +51,9 @@ bug-hunt-report.json
 bug-hunt-screenshot.png
 eval-*.png
 eval-*.md
+
+# Private notes for the author. Not part of the public app.
+docs/
+
+# Generated MCP inbox art. The repo ships an empty inbox.
+public/mcp-inbox/*.svg
