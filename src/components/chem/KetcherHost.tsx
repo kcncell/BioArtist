@@ -4,6 +4,7 @@
  * plain drag marquee when Rectangle select is active.
  * Favorites can be dropped onto the canvas (add at drop position).
  */
+import './ketcherAcsDefaults';
 import { CoordinateTransformation, MolSerializer } from 'ketcher-core';
 import { Editor } from 'ketcher-react';
 import { StandaloneStructServiceProvider } from 'ketcher-standalone';

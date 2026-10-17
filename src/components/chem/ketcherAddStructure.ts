@@ -111,32 +111,173 @@ function collectAtomBondIds(mol: {
   return { atoms, bonds };
 }
 
+const STEREO_HIDDEN = '__baStereoFlagHidden';
+const RENDER_HOOKED = '__baStereoRenderHook';
+const OPTIONS_HOOKED = '__baStereoOptionsHook';
+
+/** Ketcher's public API, or the editor instance passed through onInit. */
+function resolveEditor(ketcher: KetcherLike) {
+  if (!ketcher) return null;
+  if (ketcher.render?.options && (ketcher.event || typeof ketcher.update === 'function')) {
+    return ketcher;
+  }
+  if (ketcher.editor?.render?.options) return ketcher.editor;
+  return null;
+}
+
+function moleculeFrom(editor: KetcherLike) {
+  try {
+    return (
+      editor?.render?.ctab?.molecule ??
+      (typeof editor?.struct === 'function' ? editor.struct() : null)
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** Floating ABS/AND/OR text draws only when both of these are in the "show" state. */
+function forceStereoFlagOptions(editor: KetcherLike): void {
+  const opts = editor?.render?.options;
+  if (!opts) return;
+  opts.showStereoFlags = false;
+  opts.ignoreChiralFlag = true;
+}
+
+/**
+ * Ketcher's stereoAtoms getter returns a copy, so splicing it does not clear ABS.
+ * updateStereoFlag() would then write the label back. Hide the getter instead.
+ * Wedge and hash bonds are bond stereo and are left in place.
+ * Returns true when a fragment that still advertised a flag was hidden.
+ */
+function suppressFragmentStereoFlags(editor: KetcherLike): boolean {
+  const mol = moleculeFrom(editor);
+  if (!mol?.frags?.forEach) return false;
+  let hid = false;
+  mol.frags.forEach((frag: {
+    enhancedStereoFlag?: unknown;
+    stereoFlagPosition?: unknown;
+    [STEREO_HIDDEN]?: boolean;
+  }) => {
+    if (!frag || frag[STEREO_HIDDEN]) return;
+    let current: unknown;
+    try {
+      current = frag.enhancedStereoFlag;
+    } catch {
+      current = undefined;
+    }
+    try {
+      Object.defineProperty(frag, 'enhancedStereoFlag', {
+        configurable: true,
+        enumerable: false,
+        get() {
+          return undefined;
+        },
+      });
+      frag[STEREO_HIDDEN] = true;
+      if (current) hid = true;
+    } catch {
+      /* best effort */
+    }
+    try {
+      frag.stereoFlagPosition = undefined;
+    } catch {
+      /* optional */
+    }
+  });
+  return hid;
+}
+
+/** Re-apply the hide on every redraw, including Ketcher's own template tool. */
+function hookRenderUpdate(editor: KetcherLike): void {
+  const render = editor?.render;
+  if (!render || typeof render.update !== 'function' || render[RENDER_HOOKED]) return;
+  const orig = render.update.bind(render);
+  render.update = function hookedUpdate(...args: unknown[]) {
+    forceStereoFlagOptions(editor);
+    suppressFragmentStereoFlags(editor);
+    const result = orig(...args);
+    // Fragments pasted during this update still carry ABS until the getter is hidden.
+    if (suppressFragmentStereoFlags(editor)) {
+      forceStereoFlagOptions(editor);
+      orig(true);
+    }
+    return result;
+  };
+  render[RENDER_HOOKED] = true;
+}
+
+/** Settings reloads build a new Render with "Show the Stereo flags" on. Keep it off. */
+function hookEditorOptions(editor: KetcherLike): void {
+  if (!editor || editor[OPTIONS_HOOKED]) return;
+  editor[OPTIONS_HOOKED] = true;
+  if (typeof editor.options === 'function') {
+    const origOptions = editor.options.bind(editor);
+    editor.options = function hookedOptions(value?: Record<string, unknown>) {
+      if (arguments.length === 0) return origOptions();
+      if (value && typeof value === 'object') {
+        value.showStereoFlags = false;
+        value.ignoreChiralFlag = true;
+      }
+      const result = origOptions(value);
+      hookRenderUpdate(editor);
+      forceStereoFlagOptions(editor);
+      suppressFragmentStereoFlags(editor);
+      try {
+        editor.render?.update?.(true);
+      } catch {
+        /* ignore */
+      }
+      return result;
+    };
+  }
+  if (typeof editor.setOptions === 'function') {
+    const origSet = editor.setOptions.bind(editor);
+    editor.setOptions = function hookedSetOptions(opts: string) {
+      try {
+        const parsed = JSON.parse(opts);
+        if (parsed && typeof parsed === 'object') {
+          parsed.showStereoFlags = false;
+          parsed.ignoreChiralFlag = true;
+          opts = JSON.stringify(parsed);
+        }
+      } catch {
+        /* keep the original string */
+      }
+      const result = origSet(opts);
+      forceStereoFlagOptions(editor);
+      suppressFragmentStereoFlags(editor);
+      try {
+        editor.render?.update?.(true);
+      } catch {
+        /* ignore */
+      }
+      return result;
+    };
+  }
+}
+
+export function installNoStereoFlagLabels(ketcher: KetcherLike): void {
+  const editor = resolveEditor(ketcher);
+  if (!editor) return;
+  hookEditorOptions(editor);
+  hookRenderUpdate(editor);
+  forceStereoFlagOptions(editor);
+  suppressFragmentStereoFlags(editor);
+}
+
 /**
  * Remove Ketcher "ABS" / AND / OR enhanced-stereo flag labels.
  * Wedge/hash bonds stay; only the floating stereo-flag text is cleared.
- * Those flags are easy to leave stuck in selection and hard to deselect.
  */
 export function clearEnhancedStereoFlagLabels(ketcher: KetcherLike): void {
   try {
-    const editor = ketcher?.editor;
-    const render = editor?.render;
-    const mol = render?.ctab?.molecule ?? getMolecule(ketcher);
-    if (!mol?.frags) return;
+    installNoStereoFlagLabels(ketcher);
+    const editor = resolveEditor(ketcher);
+    if (!editor) return;
+    forceStereoFlagOptions(editor);
+    suppressFragmentStereoFlags(editor);
 
-    mol.frags.forEach((frag: { stereoFlagPosition?: unknown; updateStereoFlag?: (m: unknown) => void }) => {
-      if (!frag) return;
-      try {
-        frag.stereoFlagPosition = undefined;
-        // Drop stereo-atom bookkeeping that drives ABS/AND/OR labels
-        const atoms = (frag as { stereoAtoms?: number[] }).stereoAtoms;
-        if (Array.isArray(atoms)) atoms.splice(0, atoms.length);
-        frag.updateStereoFlag?.(mol);
-      } catch {
-        /* per-fragment best effort */
-      }
-    });
-
-    // Do not leave enhancedFlags in the selection (undeselectable ABS)
     try {
       const sel =
         (typeof editor.selection === 'function' && editor.selection()) ||
@@ -153,7 +294,7 @@ export function clearEnhancedStereoFlagLabels(ketcher: KetcherLike): void {
     }
 
     try {
-      render?.update?.(true);
+      editor.render?.update?.(true);
     } catch {
       /* optional */
     }
@@ -165,11 +306,7 @@ export function clearEnhancedStereoFlagLabels(ketcher: KetcherLike): void {
 /** Hide stereo-flag labels in Chem Studio (ABS text). Stereobonds still draw. */
 export function disableStereoFlagDisplay(ketcher: KetcherLike): void {
   try {
-    const opts = ketcher?.editor?.render?.options;
-    if (opts) {
-      opts.showStereoFlags = false;
-      opts.ignoreChiralFlag = true;
-    }
+    installNoStereoFlagLabels(ketcher);
     clearEnhancedStereoFlagLabels(ketcher);
   } catch {
     /* ignore */
@@ -235,6 +372,7 @@ export async function addStructureToKetcher(
   ketcher: KetcherLike,
   input: AddStructureInput,
 ): Promise<AddStructureResult> {
+  installNoStereoFlagLabels(ketcher);
   if (!ketcher || typeof ketcher.addFragment !== 'function') {
     return { ok: false, smiles: '', method: 'none', error: 'Ketcher not ready' };
   }

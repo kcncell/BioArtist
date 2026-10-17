@@ -16,6 +16,7 @@ import {
   type Bounds,
   computeAlignSnap,
 } from '../../lib/alignGuides';
+import { isKetcherCanvasEvent } from './ketcherSelectionEnhance';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type KetcherLike = any;
@@ -362,6 +363,8 @@ export function installKetcherStructureMove(
     const editor = getEditor(ketcher);
     // Prefer select tool, but still allow move if something is selected
     if (!editor || !hasSelection(editor)) return;
+    // A click in the settings dialog can land over a selected atom. Do not steal it.
+    if (!isKetcherCanvasEvent(editor, e)) return;
     if (!isSelectTool(editor)) {
       // If another tool is active, only move when pointer is clearly on selection
       // and we can take over — still require select-like interaction for safety

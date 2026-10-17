@@ -49,6 +49,18 @@ function getEditor(ketcher: KetcherLike): EditorLike | null {
 }
 
 /**
+ * True only for the drawing surface. Toolbar buttons, the settings dialog,
+ * and portaled menus sit in the Ketcher host but must keep their own clicks.
+ * Captured mousedown on those controls blocks dropdowns and number fields.
+ */
+export function isKetcherCanvasEvent(editor: EditorLike, event: Event): boolean {
+  const target = event.target;
+  if (!(target instanceof Node)) return false;
+  const area = editor?.render?.clientArea as Node | undefined;
+  return !!area && area.contains(target);
+}
+
+/**
  * Wrap editor.tool so we know:
  * - fragment vs rectangle/lasso select mode
  * - the last active tool (eraser, bond, select-rectangle, …) for re-activation after add
@@ -663,9 +675,8 @@ export function installKetcherSelectionEnhance(
     if (!editor?.render) return;
     ensureSelectModeTracking(editor);
 
-    // Only when the event is inside our Ketcher host (root or a descendant)
-    const target = e.target as Node | null;
-    if (!target || !root.contains(target)) return;
+    // Settings dialog, toolbar, and menus are inside the host. Leave them alone.
+    if (!isKetcherCanvasEvent(editor, e)) return;
 
     const mod = isMod(e);
     if (mod) {
@@ -704,6 +715,13 @@ export function installKetcherSelectionEnhance(
     if (e.buttons !== 0) return;
     const editor = getEditor(getKetcher());
     if (!editor) return;
+    if (!isKetcherCanvasEvent(editor, e)) {
+      if (lastHoverFrag != null) {
+        hoverFragment(editor, null);
+        lastHoverFrag = null;
+      }
+      return;
+    }
     ensureSelectModeTracking(editor);
     if (!isSelectTool(editor) || isAreaSelectMode(editor)) {
       if (lastHoverFrag != null) {
@@ -737,6 +755,7 @@ export function installKetcherSelectionEnhance(
     if (e.button !== 0 || isMod(e)) return;
     const editor = getEditor(getKetcher());
     if (!editor || !isSelectTool(editor)) return;
+    if (!isKetcherCanvasEvent(editor, e)) return;
     ensureSelectModeTracking(editor);
     if (isAreaSelectMode(editor)) return;
 
